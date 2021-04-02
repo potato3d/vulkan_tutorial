@@ -82,9 +82,6 @@ private:
 
 	std::span<const char*> getValidationLayersToEnable()
 	{
-#ifdef NDEBUG
-		return {};
-#endif
 		uint32_t vkLayerCount = 0;
 		vkEnumerateInstanceLayerProperties(&vkLayerCount, nullptr);
 		std::vector<VkLayerProperties> vkLayers(vkLayerCount);
@@ -96,6 +93,11 @@ private:
 			puts(layer.layerName);
 		}
 		putc('\n', stdout);
+
+#ifdef NDEBUG
+		puts("no validation layers enabled");
+		return {};
+#endif
 		
 		puts("enabling the following validation layers:");
 		for(auto layer : _validationLayers)
