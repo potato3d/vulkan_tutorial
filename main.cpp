@@ -77,7 +77,7 @@ private:
 	struct QueueFamilies
 	{
 		std::vector<VkQueueFamilyProperties> properties;
-		std::optional<uint32_t> graphicsFamily;
+		std::optional<uint32_t> graphics;
 	};
 
 	std::vector<const char*> getExtensionsToEnable()
@@ -258,7 +258,7 @@ private:
 			{
 				QueueFamilies families = getQueueFamilies(device);
 
-				if(families.graphicsFamily.has_value())
+				if(families.graphics.has_value())
 				{
 					printf("chosen device: %s\n", deviceProperties.deviceName);
 
@@ -275,7 +275,7 @@ private:
 						putc('\n', stdout);
 					}
 
-					printf("chosen graphics queue family: %d\n", families.graphicsFamily.value());
+					printf("chosen graphics queue family: %d\n", families.graphics.value());
 
 					_physicalDevice = device;
 					_queueFamilies = families;
@@ -305,7 +305,7 @@ private:
 			// TODO: for compute and transfer queues, decide if it is better to reuse graphics queue or prefer another queue
 			if(family.queueFlags & VK_QUEUE_GRAPHICS_BIT)
 			{
-				families.graphicsFamily = idx;
+				families.graphics = idx;
 			}
 			++idx;
 		}
