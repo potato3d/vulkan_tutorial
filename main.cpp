@@ -1,5 +1,3 @@
-#include <vulkan/vulkan.h>
-
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
@@ -8,6 +6,7 @@
 #include <vector>
 #include <optional>
 #include <array>
+#include <unordered_set>
 
 static VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pDebugMessenger)
 {
@@ -54,6 +53,7 @@ private:
 	void initVulkan() {
 		createInstance();
 		createDebugMessenger();
+		createSurface();
 		choosePhysicalDevice();
 		createLogicalDevice();
 	}
@@ -69,6 +69,7 @@ private:
 	void cleanup()
 	{
 		vkDestroyDevice(_device, nullptr);
+		vkDestroySurfaceKHR(_instance, _surface, nullptr);
 		destroyDebugMessenger();
 		vkDestroyInstance(_instance, nullptr);
 		glfwDestroyWindow(_window);
@@ -80,13 +81,16 @@ private:
 	struct QueueFamilies
 	{
 		std::vector<VkQueueFamilyProperties> properties;
+		std::vector<VkBool32> supportsPresentation;
 		std::optional<uint32_t> graphics;
+		std::optional<uint32_t> present;
 	};
 
 	std::vector<const char*> getExtensionsToEnable()
 	{
 		uint32_t extensionCount = 0;
 		vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
+
 		std::vector<VkExtensionProperties> extensions(extensionCount);
 		vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data());
 
@@ -125,6 +129,7 @@ private:
 	{
 		uint32_t vkLayerCount = 0;
 		vkEnumerateInstanceLayerProperties(&vkLayerCount, nullptr);
+
 		std::vector<VkLayerProperties> vkLayers(vkLayerCount);
 		vkEnumerateInstanceLayerProperties(&vkLayerCount, vkLayers.data());
 		
@@ -202,7 +207,7 @@ private:
 		*/
 		VkDebugUtilsMessengerCreateInfoEXT messengerCreateInfo{};
 		messengerCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-		messengerCreateInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+		messengerCreateInfo.messageSeverity = /*VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | */VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
 		messengerCreateInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
 		messengerCreateInfo.pfnUserCallback = debugCallback;
 		messengerCreateInfo.pUserData = nullptr; // optional
@@ -223,7 +228,7 @@ private:
 			throw std::runtime_error("failed to create debug messenger");
 		}
 
-		puts("created debug messenger");
+		puts("created debug messenger\n");
 	}
 
 	void destroyDebugMessenger()
@@ -235,54 +240,49 @@ private:
 		DestroyDebugUtilsMessengerEXT(_instance, _debugMessenger, nullptr);
 	}
 
+	void createSurface()
+	{
+		if(glfwCreateWindowSurface(_instance, _window, nullptr, &_surface) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to create window surface");
+		}
+	}
+
 	void choosePhysicalDevice()
 	{
-		uint32_t deviceCount = 0;
-		vkEnumeratePhysicalDevices(_instance, &deviceCount, nullptr);
+		uint32_t physicalDeviceCount = 0;
+		vkEnumeratePhysicalDevices(_instance, &physicalDeviceCount, nullptr);
 		
-		if(deviceCount == 0)
+		if(physicalDeviceCount == 0)
 		{
 			throw std::runtime_error("failed to find any GPU with Vulkan support");
 		}
 
-		std::vector<VkPhysicalDevice> devices(deviceCount);
-		vkEnumeratePhysicalDevices(_instance, &deviceCount, devices.data());
+		std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
+		vkEnumeratePhysicalDevices(_instance, &physicalDeviceCount, physicalDevices.data());
 
-		for(auto device : devices)
+		VkPhysicalDeviceProperties chosenPhysicalDeviceProperties;
+
+		// greedily choose first discrete gpu if any
+		// TODO: more sophisticated logic to choose best device with fallbacks
+		for(auto physicalDevice : physicalDevices)
 		{
-			// TODO: more sophisticated criteria
-			VkPhysicalDeviceProperties deviceProperties;
-			vkGetPhysicalDeviceProperties(device, &deviceProperties);
+			VkPhysicalDeviceProperties physicalDeviceProperties;
+			vkGetPhysicalDeviceProperties(physicalDevice, &physicalDeviceProperties);
 
-			VkPhysicalDeviceFeatures deviceFeatures;
-			vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
+			VkPhysicalDeviceFeatures physicalDeviceFeatures;
+			vkGetPhysicalDeviceFeatures(physicalDevice, &physicalDeviceFeatures);
 
-			if(deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+			QueueFamilies families = getQueueFamilies(physicalDevice);
+
+			if(families.graphics.has_value() && families.present.has_value())
 			{
-				QueueFamilies families = getQueueFamilies(device);
+				chosenPhysicalDeviceProperties = physicalDeviceProperties;
+				_physicalDevice = physicalDevice;
+				_queueFamilies = families;
 
-				if(families.graphics.has_value())
+				if(physicalDeviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
 				{
-					printf("chosen device: %s\n", deviceProperties.deviceName);
-
-					for(uint32_t idx = 0; idx < families.properties.size(); ++idx)
-					{
-						const auto& family = families.properties[idx];
-
-						printf("queue family %d:", idx);
-						if(family.queueFlags & VK_QUEUE_GRAPHICS_BIT) fputs(" graphics", stdout);
-						if(family.queueFlags & VK_QUEUE_COMPUTE_BIT) fputs(" compute", stdout);
-						if(family.queueFlags & VK_QUEUE_TRANSFER_BIT) fputs(" transfer", stdout);
-						if(family.queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) fputs(" sparse_binding", stdout);
-						if(family.queueFlags & VK_QUEUE_PROTECTED_BIT) fputs(" protected", stdout);
-						printf(" (count: %d)", family.queueCount);
-						putc('\n', stdout);
-					}
-
-					printf("chosen graphics queue family: %d\n", families.graphics.value());
-
-					_physicalDevice = device;
-					_queueFamilies = families;
 					break;
 				}
 			}
@@ -292,26 +292,60 @@ private:
 		{
 			throw std::runtime_error("failed to find a suitable GPU");
 		}
+
+		printf("chosen device: %s\n", chosenPhysicalDeviceProperties.deviceName);
+
+		for(uint32_t idx = 0; idx < _queueFamilies.properties.size(); ++idx)
+		{
+			const auto& family = _queueFamilies.properties[idx];
+
+			printf("queue family %d:", idx);
+			if(family.queueFlags & VK_QUEUE_GRAPHICS_BIT) fputs(" graphics", stdout);
+			if(family.queueFlags & VK_QUEUE_COMPUTE_BIT) fputs(" compute", stdout);
+			if(family.queueFlags & VK_QUEUE_TRANSFER_BIT) fputs(" transfer", stdout);
+			if(family.queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) fputs(" sparse_binding", stdout);
+			if(family.queueFlags & VK_QUEUE_PROTECTED_BIT) fputs(" protected", stdout);
+			printf(" (count: %d)", family.queueCount);
+			putc('\n', stdout);
+		}
+
+		printf("chosen graphics queue family: %d\n", _queueFamilies.graphics.value());
+		printf("chosen present  queue family: %d\n", _queueFamilies.present.value());
 	}
 
-	QueueFamilies getQueueFamilies(VkPhysicalDevice device)
+	QueueFamilies getQueueFamilies(VkPhysicalDevice physicalDevice)
 	{
 		QueueFamilies families;
 		
 		uint32_t queueFamilyCount = 0;
-		vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
-		families.properties.resize(queueFamilyCount);
-		vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, families.properties.data());
+		vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, nullptr);
 
-		uint32_t idx = 0;
-		for(const auto& family : families.properties)
+		families.properties.resize(queueFamilyCount);
+		vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, families.properties.data());
+
+		families.supportsPresentation.resize(queueFamilyCount);
+		for(uint32_t i = 0; i < queueFamilyCount; ++i)
 		{
-			// TODO: for compute and transfer queues, decide if it is better to reuse graphics queue or prefer another queue
-			if(family.queueFlags & VK_QUEUE_GRAPHICS_BIT)
+			vkGetPhysicalDeviceSurfaceSupportKHR(physicalDevice, i, _surface, &families.supportsPresentation[i]);
+		}
+
+		// greedily choose first graphics queue that also supports presentation if any
+		// TODO: handle multiple graphics queues, how to choose which one to use?
+		// TODO: for compute and transfer queues, decide if it is better to reuse graphics queue or prefer another queue
+		for(uint32_t i = 0; i < queueFamilyCount; ++i)
+		{
+			if(families.properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
 			{
-				families.graphics = idx;
+				families.graphics = i;
 			}
-			++idx;
+			if(families.supportsPresentation[i])
+			{
+				families.present = i;
+			}
+			if(families.graphics == families.present)
+			{
+				break;
+			}
 		}
 
 		return families;
@@ -319,19 +353,28 @@ private:
 
 	void createLogicalDevice()
 	{
-		float queuePriority = 1.0f;
+		std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+		std::unordered_set<uint32_t> uniqueQueueFamilies = {_queueFamilies.graphics.value(), _queueFamilies.present.value()};
 
-		VkDeviceQueueCreateInfo queueCreateInfo{};
-		queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-		queueCreateInfo.queueFamilyIndex = _queueFamilies.graphics.value();
-		queueCreateInfo.queueCount = 1;
-		queueCreateInfo.pQueuePriorities = &queuePriority;
+		float queuePriority = 1.0f;
+		for(auto queueFamily : uniqueQueueFamilies)
+		{
+			VkDeviceQueueCreateInfo queueCreateInfo{};
+			queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+			queueCreateInfo.queueFamilyIndex = queueFamily;
+			queueCreateInfo.queueCount = 1;
+			queueCreateInfo.pQueuePriorities = &queuePriority;
+
+			queueCreateInfos.push_back(queueCreateInfo);
+		}
 
 		VkPhysicalDeviceFeatures deviceFeatures{};
 
 		VkDeviceCreateInfo deviceCreateInfo{};
 		deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-		deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
+		deviceCreateInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
+		deviceCreateInfo.pQueueCreateInfos = queueCreateInfos.data();
+		deviceCreateInfo.pEnabledFeatures = &deviceFeatures;
 		deviceCreateInfo.enabledExtensionCount = 0;
 
 		if constexpr(_enableValidationLayers)
@@ -350,6 +393,7 @@ private:
 		}
 
 		vkGetDeviceQueue(_device, _queueFamilies.graphics.value(), 0, &_graphicsQueue);
+		vkGetDeviceQueue(_device, _queueFamilies.present.value(), 0, &_presentQueue);
 	}
 
 private:
@@ -369,11 +413,14 @@ private:
 
 	VkDebugUtilsMessengerEXT _debugMessenger = VK_NULL_HANDLE;
 
+	VkSurfaceKHR _surface;
+
 	VkInstance _instance = VK_NULL_HANDLE;
 	VkPhysicalDevice _physicalDevice = VK_NULL_HANDLE;
 	QueueFamilies _queueFamilies;
 	VkDevice _device = VK_NULL_HANDLE;
 	VkQueue _graphicsQueue = VK_NULL_HANDLE;
+	VkQueue _presentQueue = VK_NULL_HANDLE;
 };
 
 int main()
