@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <vector>
 #include <optional>
+#include <array>
 
 static VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pDebugMessenger)
 {
@@ -54,6 +55,7 @@ private:
 		createInstance();
 		createDebugMessenger();
 		choosePhysicalDevice();
+		createLogicalDevice();
 	}
 
 	void mainLoop()
@@ -66,6 +68,7 @@ private:
 
 	void cleanup()
 	{
+		vkDestroyDevice(_device, nullptr);
 		destroyDebugMessenger();
 		vkDestroyInstance(_instance, nullptr);
 		glfwDestroyWindow(_window);
@@ -272,6 +275,7 @@ private:
 						if(family.queueFlags & VK_QUEUE_TRANSFER_BIT) fputs(" transfer", stdout);
 						if(family.queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) fputs(" sparse_binding", stdout);
 						if(family.queueFlags & VK_QUEUE_PROTECTED_BIT) fputs(" protected", stdout);
+						printf(" (count: %d)", family.queueCount);
 						putc('\n', stdout);
 					}
 
@@ -313,6 +317,41 @@ private:
 		return families;
 	}
 
+	void createLogicalDevice()
+	{
+		float queuePriority = 1.0f;
+
+		VkDeviceQueueCreateInfo queueCreateInfo{};
+		queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+		queueCreateInfo.queueFamilyIndex = _queueFamilies.graphics.value();
+		queueCreateInfo.queueCount = 1;
+		queueCreateInfo.pQueuePriorities = &queuePriority;
+
+		VkPhysicalDeviceFeatures deviceFeatures{};
+
+		VkDeviceCreateInfo deviceCreateInfo{};
+		deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+		deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
+		deviceCreateInfo.enabledExtensionCount = 0;
+
+		if constexpr(_enableValidationLayers)
+		{
+			deviceCreateInfo.enabledLayerCount = static_cast<uint32_t>(_validationLayers.size());
+			deviceCreateInfo.ppEnabledLayerNames = _validationLayers.data();
+		}
+		else
+		{
+			deviceCreateInfo.enabledLayerCount = 0;
+		}
+
+		if(vkCreateDevice(_physicalDevice, &deviceCreateInfo, nullptr, &_device) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to create logical device");
+		}
+
+		vkGetDeviceQueue(_device, _queueFamilies.graphics.value(), 0, &_graphicsQueue);
+	}
+
 private:
 	static constexpr uint32_t WIDTH = 800;
 	static constexpr uint32_t HEIGHT = 600;
@@ -333,6 +372,8 @@ private:
 	VkInstance _instance = VK_NULL_HANDLE;
 	VkPhysicalDevice _physicalDevice = VK_NULL_HANDLE;
 	QueueFamilies _queueFamilies;
+	VkDevice _device = VK_NULL_HANDLE;
+	VkQueue _graphicsQueue = VK_NULL_HANDLE;
 };
 
 int main()
