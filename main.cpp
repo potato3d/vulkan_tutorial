@@ -63,6 +63,8 @@ private:
 		choosePhysicalDevice();
 		createLogicalDevice();
 		createSwapChain();
+		createSwapChainImageViews();
+		createGraphicsPipeline();
 	}
 
 	void mainLoop()
@@ -75,6 +77,7 @@ private:
 
 	void cleanup()
 	{
+		destroySwapChainImageViews();
 		vkDestroySwapchainKHR(_device, _swapChain, nullptr);
 		vkDestroyDevice(_device, nullptr);
 		vkDestroySurfaceKHR(_instance, _surface, nullptr);
@@ -540,6 +543,8 @@ private:
 			imageCount = _swapChainInfo.capabilities.maxImageCount;
 		}
 
+		printf("swapchain supports min of %d and max of %d images\n", _swapChainInfo.capabilities.minImageCount, _swapChainInfo.capabilities.maxImageCount);
+
 		VkSwapchainCreateInfoKHR swapChainCreateInfo{};
 		swapChainCreateInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
 		swapChainCreateInfo.surface = _surface;
@@ -575,13 +580,56 @@ private:
 			throw std::runtime_error("failed to create swap chain");
 		}
 
+		printf("asked for %d images,", imageCount);
 		vkGetSwapchainImagesKHR(_device, _swapChain, &imageCount, nullptr);
+		printf(" got %d images\n\n", imageCount);
 
 		_swapChainImages.resize(imageCount);
 		vkGetSwapchainImagesKHR(_device, _swapChain, &imageCount, _swapChainImages.data());
 
 		_swapChainImageFormat = surfaceFormat.format;
 		_swapChainExtent = extent;
+	}
+
+	void createSwapChainImageViews()
+	{
+		_swapChainImageViews.resize(_swapChainImages.size());
+		
+		for(size_t i = 0; i < _swapChainImages.size(); ++i)
+		{
+			VkImageViewCreateInfo imageViewCreateInfo{};
+			imageViewCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+			imageViewCreateInfo.image = _swapChainImages[i];
+			imageViewCreateInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+			imageViewCreateInfo.format = _swapChainImageFormat;
+			imageViewCreateInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+			imageViewCreateInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+			imageViewCreateInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+			imageViewCreateInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+			imageViewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			imageViewCreateInfo.subresourceRange.baseMipLevel = 0;
+			imageViewCreateInfo.subresourceRange.levelCount = 1;
+			imageViewCreateInfo.subresourceRange.baseArrayLayer = 0;
+			imageViewCreateInfo.subresourceRange.layerCount = 1;
+
+			if(vkCreateImageView(_device, &imageViewCreateInfo, nullptr, &_swapChainImageViews[i]) != VK_SUCCESS)
+			{
+				throw std::runtime_error("failed to create image view");
+			}
+		}
+	}
+
+	void destroySwapChainImageViews()
+	{
+		for(auto imageView : _swapChainImageViews)
+		{
+			vkDestroyImageView(_device, imageView, nullptr);
+		}
+	}
+
+	void createGraphicsPipeline()
+	{
+
 	}
 
 private:
@@ -620,6 +668,7 @@ private:
 	std::vector<VkImage> _swapChainImages;
 	VkFormat _swapChainImageFormat;
 	VkExtent2D _swapChainExtent;
+	std::vector<VkImageView> _swapChainImageViews;
 };
 
 int main()
