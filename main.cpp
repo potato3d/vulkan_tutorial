@@ -66,6 +66,8 @@ private:
 		createSwapChain();
 		createSwapChainImageViews();
 		createRenderPass();
+		createSwapChainFramebuffers();
+		createGraphicsPipelineLayout();
 		createGraphicsPipeline();
 	}
 
@@ -80,7 +82,8 @@ private:
 	void cleanup()
 	{
 		vkDestroyPipeline(_device, _graphicsPipeline, nullptr);
-		vkDestroyPipelineLayout(_device, _pipelineLayout, nullptr);
+		vkDestroyPipelineLayout(_device, _graphicsPipelineLayout, nullptr);
+		destroySwapChainFramebuffers();
 		vkDestroyRenderPass(_device, _renderPass, nullptr);
 		destroySwapChainImageViews();
 		vkDestroySwapchainKHR(_device, _swapChain, nullptr);
@@ -671,6 +674,21 @@ private:
 		}
 	}
 
+	void createGraphicsPipelineLayout()
+	{
+		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
+		pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+		pipelineLayoutCreateInfo.setLayoutCount = 0; // Optional
+		pipelineLayoutCreateInfo.pSetLayouts = nullptr; // Optional
+		pipelineLayoutCreateInfo.pushConstantRangeCount = 0; // Optional
+		pipelineLayoutCreateInfo.pPushConstantRanges = nullptr; // Optional
+
+		if(vkCreatePipelineLayout(_device, &pipelineLayoutCreateInfo, nullptr, &_graphicsPipelineLayout) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to create pipeline layout!");
+		}
+	}
+
 	std::vector<uint32_t> readSPV(const std::string& filename)
 	{
 		std::vector<uint32_t> byteCode;
@@ -843,20 +861,6 @@ private:
 		dynamicStateCreateInfo.dynamicStateCount = static_cast<uint32_t>(std::size(dynamicStates));
 		dynamicStateCreateInfo.pDynamicStates = dynamicStates;
 
-		// pipeline layout --------------------------------------------------------------------------
-
-		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
-		pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-		pipelineLayoutCreateInfo.setLayoutCount = 0; // Optional
-		pipelineLayoutCreateInfo.pSetLayouts = nullptr; // Optional
-		pipelineLayoutCreateInfo.pushConstantRangeCount = 0; // Optional
-		pipelineLayoutCreateInfo.pPushConstantRanges = nullptr; // Optional
-
-		if(vkCreatePipelineLayout(_device, &pipelineLayoutCreateInfo, nullptr, &_pipelineLayout) != VK_SUCCESS)
-		{
-			throw std::runtime_error("failed to create pipeline layout!");
-		}
-
 		// --------------------------------------------------------------------------------------------
 		// graphics pipeline
 		// --------------------------------------------------------------------------------------------
@@ -873,7 +877,7 @@ private:
 		pipelineCreateInfo.pDepthStencilState = nullptr; // Optional
 		pipelineCreateInfo.pColorBlendState = &colorBlendCreateInfo;
 		pipelineCreateInfo.pDynamicState = nullptr; // Optional
-		pipelineCreateInfo.layout = _pipelineLayout;
+		pipelineCreateInfo.layout = _graphicsPipelineLayout;
 		pipelineCreateInfo.renderPass = _renderPass;
 		pipelineCreateInfo.subpass = 0; // which subpass where this graphics pipeline will be used
 		pipelineCreateInfo.basePipelineHandle = VK_NULL_HANDLE; // Optional
@@ -894,11 +898,39 @@ private:
 		vkDestroyShaderModule(_device, vertShaderModule, nullptr);
 	}
 
-private:
-	static constexpr uint32_t WIDTH = 800;
-	static constexpr uint32_t HEIGHT = 600;
-	GLFWwindow* _window = nullptr;
+	void createSwapChainFramebuffers()
+	{
+		_swapChainFramebuffers.resize(_swapChainImageViews.size());
 
+		for(size_t i = 0; i < _swapChainImageViews.size(); ++i)
+		{
+			VkImageView attachments[] = {_swapChainImageViews[i]};
+
+			VkFramebufferCreateInfo framebufferInfo{};
+			framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+			framebufferInfo.renderPass = _renderPass;
+			framebufferInfo.attachmentCount = static_cast<uint32_t>(std::size(attachments));
+			framebufferInfo.pAttachments = attachments;
+			framebufferInfo.width = _swapChainExtent.width;
+			framebufferInfo.height = _swapChainExtent.height;
+			framebufferInfo.layers = 1;
+
+			if(vkCreateFramebuffer(_device, &framebufferInfo, nullptr, &_swapChainFramebuffers[i]) != VK_SUCCESS)
+			{
+				throw std::runtime_error("failed to create framebuffer");
+			}
+		}
+	}
+
+	void destroySwapChainFramebuffers()
+	{
+		for(auto framebuffer : _swapChainFramebuffers)
+		{
+			vkDestroyFramebuffer(_device, framebuffer, nullptr);
+		}
+	}
+
+private:
 	std::vector<const char*> _requiredInstanceExtensions;
 
 	std::vector<const char*> _requiredValidationLayers = {
@@ -917,22 +949,31 @@ private:
 
 	VkDebugUtilsMessengerEXT _debugMessenger = VK_NULL_HANDLE;
 
-	VkSurfaceKHR _surface;
+	static constexpr uint32_t WIDTH = 800;
+	static constexpr uint32_t HEIGHT = 600;
+	GLFWwindow* _window = nullptr;
+	VkSurfaceKHR _surface = VK_NULL_HANDLE;
 
 	VkInstance _instance = VK_NULL_HANDLE;
+	
 	VkPhysicalDevice _physicalDevice = VK_NULL_HANDLE;
 	QueueFamilies _queueFamilies;
 	SwapChainInfo _swapChainInfo;
+
 	VkDevice _device = VK_NULL_HANDLE;
 	VkQueue _graphicsQueue = VK_NULL_HANDLE;
 	VkQueue _presentQueue = VK_NULL_HANDLE;
+	
 	VkSwapchainKHR _swapChain = VK_NULL_HANDLE;
 	std::vector<VkImage> _swapChainImages;
 	VkFormat _swapChainImageFormat;
 	VkExtent2D _swapChainExtent;
 	std::vector<VkImageView> _swapChainImageViews;
+	std::vector<VkFramebuffer> _swapChainFramebuffers;
+	
 	VkRenderPass _renderPass;
-	VkPipelineLayout _pipelineLayout;
+
+	VkPipelineLayout _graphicsPipelineLayout;
 	VkPipeline _graphicsPipeline;
 };
 
