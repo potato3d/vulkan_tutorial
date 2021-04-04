@@ -7,6 +7,7 @@
 #include <optional>
 #include <array>
 #include <unordered_set>
+#include <iterator>
 
 static VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pDebugMessenger)
 {
@@ -45,9 +46,14 @@ private:
 	void initWindow()
 	{
 		glfwInit();
+		
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 		glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 		_window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan Tutorial", nullptr, nullptr);
+
+		uint32_t glfwExtensionCount = 0;
+		const char** glfwExtensionNames = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+		_requiredInstanceExtensions.insert(_requiredInstanceExtensions.end(), glfwExtensionNames, glfwExtensionNames + glfwExtensionCount);
 	}
 
 	void initVulkan() {
@@ -86,7 +92,7 @@ private:
 		std::optional<uint32_t> present;
 	};
 
-	std::vector<const char*> getExtensionsToEnable()
+	void checkRequiredInstanceExtensions()
 	{
 		uint32_t extensionCount = 0;
 		vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
@@ -94,65 +100,75 @@ private:
 		std::vector<VkExtensionProperties> extensions(extensionCount);
 		vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data());
 
-		puts("available extensions:");
+		std::unordered_set<std::string_view> availableExtensions;
+		for(const auto& e : extensions)
+		{
+			availableExtensions.emplace(e.extensionName);
+		}
+
+		puts("available instance extensions:");
 		for(const auto& extension : extensions)
 		{
 			puts(extension.extensionName);
 		}
 		putc('\n', stdout);
 
-		uint32_t glfwExtensionCount = 0;
-		const char** glfwExtensionNames = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-		std::vector<const char*> requiredExtensions{glfwExtensionNames, glfwExtensionNames + glfwExtensionCount};
-
-		if constexpr(_enableValidationLayers)
+		puts("enabling the following instance extensions:");
+		for(auto extension : _requiredInstanceExtensions)
 		{
-			requiredExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-		}
-
-		puts("enabling the following extensions:");
-		for(auto extension : requiredExtensions)
-		{
-			if(auto itr = std::find_if(extensions.begin(), extensions.end(), [&](const auto& e) {return e.extensionName == std::string_view{extension}; });
-				itr == extensions.end())
+			if(!availableExtensions.contains(extension))
 			{
-				throw std::runtime_error("required extension not found: " + std::string{extension});
+				throw std::runtime_error("required instance extension not found: " + std::string{extension});
 			}
 			puts(extension);
 		}
 		putc('\n', stdout);
-
-		return requiredExtensions;
 	}
 
-	std::vector<const char*> getValidationLayersToEnable()
+	void checkRequiredValidationLayers()
 	{
-		uint32_t vkLayerCount = 0;
-		vkEnumerateInstanceLayerProperties(&vkLayerCount, nullptr);
+		uint32_t layerCount = 0;
+		vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
 
-		std::vector<VkLayerProperties> vkLayers(vkLayerCount);
-		vkEnumerateInstanceLayerProperties(&vkLayerCount, vkLayers.data());
+		std::vector<VkLayerProperties> layers(layerCount);
+		vkEnumerateInstanceLayerProperties(&layerCount, layers.data());
+
+		std::unordered_set<std::string_view> availableLayers;
 		
 		puts("available validation layers:");
-		for(const auto& layer : vkLayers)
+		for(const auto& layer : layers)
 		{
+			availableLayers.emplace(layer.layerName);
 			puts(layer.layerName);
 		}
 		putc('\n', stdout);
 		
 		puts("enabling the following validation layers:");
-		for(auto layer : _validationLayers)
+		for(auto layer : _requiredValidationLayers)
 		{
-			if(auto itr = std::find_if(vkLayers.begin(), vkLayers.end(), [&](const auto& l) {return l.layerName == std::string_view{layer}; });
-				itr == vkLayers.end())
+			if(!availableLayers.contains(layer))
 			{
 				throw std::runtime_error("required validation layer not found: " + std::string{layer});
 			}
 			puts(layer);
 		}
 		putc('\n', stdout);
+	}
 
-		return _validationLayers;
+	VkDebugUtilsMessengerCreateInfoEXT getDebugMessengerCreateInfo()
+	{
+		// TODO:
+		/*
+			There are a lot more settings for the behavior of validation layers than just the flags specified in the VkDebugUtilsMessengerCreateInfoEXT struct. Browse to the Vulkan SDK and go to the Config directory. There you will find a vk_layer_settings.txt file that explains how to configure the layers.
+			To configure the layer settings for your own application, copy the file to the Debug and Release directories of your project and follow the instructions to set the desired behavior.
+		*/
+		VkDebugUtilsMessengerCreateInfoEXT messengerCreateInfo{};
+		messengerCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+		messengerCreateInfo.messageSeverity = /*VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | */VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+		messengerCreateInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+		messengerCreateInfo.pfnUserCallback = debugCallback;
+		messengerCreateInfo.pUserData = nullptr; // optional
+		return messengerCreateInfo;
 	}
 
 	void createInstance()
@@ -165,16 +181,21 @@ private:
 		appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
 		appInfo.apiVersion = VK_API_VERSION_1_2;
 
-		std::vector<const char*> extensions = getExtensionsToEnable();
-		std::vector<const char*> layers = getValidationLayersToEnable();
+		if constexpr(_enableValidationLayers)
+		{
+			_requiredInstanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+		}
+
+		checkRequiredInstanceExtensions();
+		checkRequiredValidationLayers();
 
 		VkInstanceCreateInfo instanceCreateInfo{};
 		instanceCreateInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 		instanceCreateInfo.pApplicationInfo = &appInfo;
-		instanceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
-		instanceCreateInfo.ppEnabledExtensionNames = extensions.data();
-		instanceCreateInfo.enabledLayerCount = static_cast<uint32_t>(layers.size());
-		instanceCreateInfo.ppEnabledLayerNames = layers.data();
+		instanceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(_requiredInstanceExtensions.size());
+		instanceCreateInfo.ppEnabledExtensionNames = _requiredInstanceExtensions.data();
+		instanceCreateInfo.enabledLayerCount = static_cast<uint32_t>(_requiredValidationLayers.size());
+		instanceCreateInfo.ppEnabledLayerNames = _requiredValidationLayers.data();
 
 		VkDebugUtilsMessengerCreateInfoEXT messengerCreateInfo = getDebugMessengerCreateInfo();
 		if constexpr(_enableValidationLayers)
@@ -196,22 +217,6 @@ private:
 	{
 		fprintf(stderr, "validation: %s\n", pCallbackData->pMessage);
 		return VK_FALSE;
-	}
-
-	VkDebugUtilsMessengerCreateInfoEXT getDebugMessengerCreateInfo()
-	{
-		// TODO:
-		/*
-			There are a lot more settings for the behavior of validation layers than just the flags specified in the VkDebugUtilsMessengerCreateInfoEXT struct. Browse to the Vulkan SDK and go to the Config directory. There you will find a vk_layer_settings.txt file that explains how to configure the layers.
-			To configure the layer settings for your own application, copy the file to the Debug and Release directories of your project and follow the instructions to set the desired behavior.
-		*/
-		VkDebugUtilsMessengerCreateInfoEXT messengerCreateInfo{};
-		messengerCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-		messengerCreateInfo.messageSeverity = /*VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | */VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-		messengerCreateInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-		messengerCreateInfo.pfnUserCallback = debugCallback;
-		messengerCreateInfo.pUserData = nullptr; // optional
-		return messengerCreateInfo;
 	}
 
 	void createDebugMessenger()
@@ -248,75 +253,34 @@ private:
 		}
 	}
 
-	void choosePhysicalDevice()
+	bool checkPhysicalDeviceExtensions(VkPhysicalDevice physicalDevice, std::vector<VkExtensionProperties>& physicalDeviceExtensions)
 	{
-		uint32_t physicalDeviceCount = 0;
-		vkEnumeratePhysicalDevices(_instance, &physicalDeviceCount, nullptr);
+		uint32_t extensionCount = 0;
+		vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount, nullptr);
+
+		physicalDeviceExtensions.resize(extensionCount);
+		vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount, physicalDeviceExtensions.data());
+
+		std::unordered_set<std::string_view> availableExtensions;
 		
-		if(physicalDeviceCount == 0)
+		for(const auto& e : physicalDeviceExtensions)
 		{
-			throw std::runtime_error("failed to find any GPU with Vulkan support");
+			availableExtensions.emplace(e.extensionName);
 		}
 
-		std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
-		vkEnumeratePhysicalDevices(_instance, &physicalDeviceCount, physicalDevices.data());
-
-		VkPhysicalDeviceProperties chosenPhysicalDeviceProperties;
-
-		// greedily choose first discrete gpu if any
-		// TODO: more sophisticated logic to choose best device with fallbacks
-		for(auto physicalDevice : physicalDevices)
+		for(auto extension : _requiredDeviceExtensions)
 		{
-			VkPhysicalDeviceProperties physicalDeviceProperties;
-			vkGetPhysicalDeviceProperties(physicalDevice, &physicalDeviceProperties);
-
-			VkPhysicalDeviceFeatures physicalDeviceFeatures;
-			vkGetPhysicalDeviceFeatures(physicalDevice, &physicalDeviceFeatures);
-
-			QueueFamilies families = getQueueFamilies(physicalDevice);
-
-			if(families.graphics.has_value() && families.present.has_value())
+			if(!availableExtensions.contains(extension))
 			{
-				chosenPhysicalDeviceProperties = physicalDeviceProperties;
-				_physicalDevice = physicalDevice;
-				_queueFamilies = families;
-
-				if(physicalDeviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
-				{
-					break;
-				}
+				return false;
 			}
 		}
 
-		if(_physicalDevice == VK_NULL_HANDLE)
-		{
-			throw std::runtime_error("failed to find a suitable GPU");
-		}
-
-		printf("chosen device: %s\n", chosenPhysicalDeviceProperties.deviceName);
-
-		for(uint32_t idx = 0; idx < _queueFamilies.properties.size(); ++idx)
-		{
-			const auto& family = _queueFamilies.properties[idx];
-
-			printf("queue family %d:", idx);
-			if(family.queueFlags & VK_QUEUE_GRAPHICS_BIT) fputs(" graphics", stdout);
-			if(family.queueFlags & VK_QUEUE_COMPUTE_BIT) fputs(" compute", stdout);
-			if(family.queueFlags & VK_QUEUE_TRANSFER_BIT) fputs(" transfer", stdout);
-			if(family.queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) fputs(" sparse_binding", stdout);
-			if(family.queueFlags & VK_QUEUE_PROTECTED_BIT) fputs(" protected", stdout);
-			printf(" (count: %d)", family.queueCount);
-			putc('\n', stdout);
-		}
-
-		printf("chosen graphics queue family: %d\n", _queueFamilies.graphics.value());
-		printf("chosen present  queue family: %d\n", _queueFamilies.present.value());
+		return true;
 	}
 
-	QueueFamilies getQueueFamilies(VkPhysicalDevice physicalDevice)
+	bool checkPhysicalDeviceQueueFamilies(VkPhysicalDevice physicalDevice, QueueFamilies& families)
 	{
-		QueueFamilies families;
-		
 		uint32_t queueFamilyCount = 0;
 		vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, nullptr);
 
@@ -344,11 +308,96 @@ private:
 			}
 			if(families.graphics == families.present)
 			{
+				return true;
+			}
+		}
+
+		return families.graphics.has_value() && families.present.has_value();
+	}
+
+	void choosePhysicalDevice()
+	{
+		uint32_t physicalDeviceCount = 0;
+		vkEnumeratePhysicalDevices(_instance, &physicalDeviceCount, nullptr);
+		
+		if(physicalDeviceCount == 0)
+		{
+			throw std::runtime_error("failed to find any GPU with Vulkan support");
+		}
+
+		std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
+		vkEnumeratePhysicalDevices(_instance, &physicalDeviceCount, physicalDevices.data());
+
+		VkPhysicalDeviceProperties properties;
+		VkPhysicalDeviceFeatures features;
+		std::vector<VkExtensionProperties> extensions;
+		QueueFamilies families;
+
+		// greedily choose first discrete gpu if any
+		// TODO: more sophisticated logic to choose best device with fallbacks
+		for(auto physicalDevice : physicalDevices)
+		{
+			if(!checkPhysicalDeviceExtensions(physicalDevice, extensions))
+			{
+				continue;
+			}
+
+			if(!checkPhysicalDeviceQueueFamilies(physicalDevice, families))
+			{
+				continue;
+			}
+
+			vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+			vkGetPhysicalDeviceFeatures(physicalDevice, &features);
+
+			_physicalDevice = physicalDevice;
+			_queueFamilies = families;
+
+			if(properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+			{
 				break;
 			}
 		}
 
-		return families;
+		if(_physicalDevice == VK_NULL_HANDLE)
+		{
+			throw std::runtime_error("failed to find a suitable GPU");
+		}
+
+		printf("chosen device: %s\n", properties.deviceName);
+
+		for(uint32_t idx = 0; idx < _queueFamilies.properties.size(); ++idx)
+		{
+			const auto& family = _queueFamilies.properties[idx];
+
+			printf("queue family %d:", idx);
+			if(family.queueFlags & VK_QUEUE_GRAPHICS_BIT) fputs(" graphics", stdout);
+			if(family.queueFlags & VK_QUEUE_COMPUTE_BIT) fputs(" compute", stdout);
+			if(family.queueFlags & VK_QUEUE_TRANSFER_BIT) fputs(" transfer", stdout);
+			if(family.queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) fputs(" sparse_binding", stdout);
+			if(family.queueFlags & VK_QUEUE_PROTECTED_BIT) fputs(" protected", stdout);
+			if(_queueFamilies.supportsPresentation[idx]) fputs(" present", stdout);
+			printf(" (count: %d)", family.queueCount);
+			putc('\n', stdout);
+		}
+
+		printf("chosen graphics queue family: %d\n", _queueFamilies.graphics.value());
+		printf("chosen present  queue family: %d\n", _queueFamilies.present.value());
+		putc('\n', stdout);
+
+		puts("available device extensions:");
+		for(const auto& e : extensions)
+		{
+			puts(e.extensionName);
+		}
+		putc('\n', stdout);
+
+		puts("enabling the following device extensions:");
+		for(auto extension : _requiredDeviceExtensions)
+		{
+			puts(extension);
+		}
+		putc('\n', stdout);
 	}
 
 	void createLogicalDevice()
@@ -375,17 +424,19 @@ private:
 		deviceCreateInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
 		deviceCreateInfo.pQueueCreateInfos = queueCreateInfos.data();
 		deviceCreateInfo.pEnabledFeatures = &deviceFeatures;
-		deviceCreateInfo.enabledExtensionCount = 0;
 
 		if constexpr(_enableValidationLayers)
 		{
-			deviceCreateInfo.enabledLayerCount = static_cast<uint32_t>(_validationLayers.size());
-			deviceCreateInfo.ppEnabledLayerNames = _validationLayers.data();
+			deviceCreateInfo.enabledLayerCount = static_cast<uint32_t>(_requiredValidationLayers.size());
+			deviceCreateInfo.ppEnabledLayerNames = _requiredValidationLayers.data();
 		}
 		else
 		{
 			deviceCreateInfo.enabledLayerCount = 0;
 		}
+
+		deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(_requiredDeviceExtensions.size());
+		deviceCreateInfo.ppEnabledExtensionNames = _requiredDeviceExtensions.data();
 
 		if(vkCreateDevice(_physicalDevice, &deviceCreateInfo, nullptr, &_device) != VK_SUCCESS)
 		{
@@ -401,8 +452,14 @@ private:
 	static constexpr uint32_t HEIGHT = 600;
 	GLFWwindow* _window = nullptr;
 
-	std::vector<const char*> _validationLayers = {
+	std::vector<const char*> _requiredInstanceExtensions;
+
+	std::vector<const char*> _requiredValidationLayers = {
 		"VK_LAYER_KHRONOS_validation"
+	};
+
+	std::vector<const char*> _requiredDeviceExtensions = {
+	    VK_KHR_SWAPCHAIN_EXTENSION_NAME
 	};
 
 #ifdef _DEBUG
