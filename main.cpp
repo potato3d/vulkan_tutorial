@@ -1082,12 +1082,10 @@ private:
 
 		// check if a previous frame is using this image -----------------------------------------------------
 
-		// Check if a previous frame is using this image (i.e. there is its fence to wait on)
 		if(_imagesInFlightFences[imageIndex] != VK_NULL_HANDLE)
 		{
 			vkWaitForFences(_device, 1, &_imagesInFlightFences[imageIndex], VK_TRUE, UINT64_MAX);
 		}
-		// Mark the image as now being in use by this frame
 		_imagesInFlightFences[imageIndex] = _framesInFlightFences[_currentFrame];
 
 		// submit command buffers to graphics queue -----------------------------------------------------
@@ -1175,26 +1173,26 @@ private:
 	VkQueue _presentQueue = VK_NULL_HANDLE;
 	
 	VkSwapchainKHR _swapChain = VK_NULL_HANDLE;
-	std::vector<VkImage> _swapChainImages;
+	std::vector<VkImage> _swapChainImages; // depends on device
 	VkFormat _swapChainImageFormat;
 	VkExtent2D _swapChainExtent;
-	std::vector<VkImageView> _swapChainImageViews;
+	std::vector<VkImageView> _swapChainImageViews; // one per swapchain image
 	
 	VkRenderPass _renderPass;
 
-	std::vector<VkFramebuffer> _framebuffers;
+	std::vector<VkFramebuffer> _framebuffers; // one per swapchain image
 
 	VkPipelineLayout _graphicsPipelineLayout;
 	VkPipeline _graphicsPipeline;
 
 	VkCommandPool _commandPool;
-	std::vector<VkCommandBuffer> _commandBuffers;
+	std::vector<VkCommandBuffer> _commandBuffers; // one per swapchain image
 
 	static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
-	std::vector<VkSemaphore> _imageAvailableSemaphores;
-	std::vector<VkSemaphore> _renderFinishedSemaphores;
-	std::vector<VkFence> _framesInFlightFences;
-	std::vector<VkFence> _imagesInFlightFences; // is there any frame in flight currently associated to a given swapchain image?
+	std::vector<VkSemaphore> _imageAvailableSemaphores; // one per frame in flight
+	std::vector<VkSemaphore> _renderFinishedSemaphores; // one per frame in flight
+	std::vector<VkFence> _framesInFlightFences; // one per frame in flight
+	std::vector<VkFence> _imagesInFlightFences; // one per swapchain image. is there any frame in flight currently associated to a given swapchain image?
 	uint32_t _currentFrame = 0;
 };
 
