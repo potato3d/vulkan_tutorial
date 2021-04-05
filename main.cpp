@@ -1094,18 +1094,18 @@ private:
 		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
 		// these two arrays run in parallel
-		VkSemaphore waitSemaphores[] = {_imageAvailableSemaphores[_currentFrame]};
+		VkSemaphore imageAvailableSemaphores[] = {_imageAvailableSemaphores[_currentFrame]};
 		VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-		submitInfo.waitSemaphoreCount = static_cast<uint32_t>(std::size(waitSemaphores));
-		submitInfo.pWaitSemaphores = waitSemaphores;
+		submitInfo.waitSemaphoreCount = static_cast<uint32_t>(std::size(imageAvailableSemaphores));
+		submitInfo.pWaitSemaphores = imageAvailableSemaphores;
 		submitInfo.pWaitDstStageMask = waitStages;
 
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &_commandBuffers[imageIndex];
 
-		VkSemaphore signalSemaphores[] = {_renderFinishedSemaphores[_currentFrame]};
-		submitInfo.signalSemaphoreCount = static_cast<uint32_t>(std::size(signalSemaphores));
-		submitInfo.pSignalSemaphores = signalSemaphores;
+		VkSemaphore renderFinishedSemaphores[] = {_renderFinishedSemaphores[_currentFrame]};
+		submitInfo.signalSemaphoreCount = static_cast<uint32_t>(std::size(renderFinishedSemaphores));
+		submitInfo.pSignalSemaphores = renderFinishedSemaphores;
 
 		// remember to reset the fence that will be triggered when current frame finishes
 		vkResetFences(_device, 1, &_framesInFlightFences[_currentFrame]);
@@ -1119,8 +1119,8 @@ private:
 
 		VkPresentInfoKHR presentInfo{};
 		presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-		presentInfo.waitSemaphoreCount = static_cast<uint32_t>(std::size(signalSemaphores));
-		presentInfo.pWaitSemaphores = signalSemaphores;
+		presentInfo.waitSemaphoreCount = static_cast<uint32_t>(std::size(renderFinishedSemaphores));
+		presentInfo.pWaitSemaphores = renderFinishedSemaphores;
 
 		// these two arrays run in parallel
 		VkSwapchainKHR swapChains[] = {_swapChain};
