@@ -1039,8 +1039,6 @@ private:
 		_renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
 		_framesInFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
 
-		_imagesInFlightFences.resize(_swapChainImages.size(), VK_NULL_HANDLE);
-
 		VkSemaphoreCreateInfo semaphoreCreateInfo{};
 		semaphoreCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
@@ -1074,19 +1072,12 @@ private:
 		// wait until current frame is finished -----------------------------------------------------
 
 		vkWaitForFences(_device, 1, &_framesInFlightFences[_currentFrame], VK_TRUE, UINT64_MAX);
+		vkResetFences(_device, 1, &_framesInFlightFences[_currentFrame]);
 
 		// acquire next image from swap chain -----------------------------------------------------
 
 		uint32_t imageIndex = 0;
 		vkAcquireNextImageKHR(_device, _swapChain, UINT64_MAX, _imageAvailableSemaphores[_currentFrame], VK_NULL_HANDLE, &imageIndex);
-
-		// check if a previous frame is using this image -----------------------------------------------------
-
-		if(_imagesInFlightFences[imageIndex] != VK_NULL_HANDLE)
-		{
-			vkWaitForFences(_device, 1, &_imagesInFlightFences[imageIndex], VK_TRUE, UINT64_MAX);
-		}
-		_imagesInFlightFences[imageIndex] = _framesInFlightFences[_currentFrame];
 
 		// submit command buffers to graphics queue -----------------------------------------------------
 
@@ -1103,12 +1094,13 @@ private:
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &_commandBuffers[imageIndex];
 
+		// if graphics and present queues are the same we don't need a semaphore for explicit synchronization
 		VkSemaphore renderFinishedSemaphores[] = {_renderFinishedSemaphores[_currentFrame]};
-		submitInfo.signalSemaphoreCount = static_cast<uint32_t>(std::size(renderFinishedSemaphores));
-		submitInfo.pSignalSemaphores = renderFinishedSemaphores;
-
-		// remember to reset the fence that will be triggered when current frame finishes
-		vkResetFences(_device, 1, &_framesInFlightFences[_currentFrame]);
+		if(_queueFamilies.graphics != _queueFamilies.present)
+		{
+			submitInfo.signalSemaphoreCount = static_cast<uint32_t>(std::size(renderFinishedSemaphores));
+			submitInfo.pSignalSemaphores = renderFinishedSemaphores;
+		}
 
 		if(vkQueueSubmit(_graphicsQueue, 1, &submitInfo, _framesInFlightFences[_currentFrame]) != VK_SUCCESS)
 		{
@@ -1119,8 +1111,13 @@ private:
 
 		VkPresentInfoKHR presentInfo{};
 		presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-		presentInfo.waitSemaphoreCount = static_cast<uint32_t>(std::size(renderFinishedSemaphores));
-		presentInfo.pWaitSemaphores = renderFinishedSemaphores;
+
+		// if graphics and present queues are the same we don't need a semaphore for explicit synchronization
+		if(_queueFamilies.graphics != _queueFamilies.present)
+		{
+			presentInfo.waitSemaphoreCount = static_cast<uint32_t>(std::size(renderFinishedSemaphores));
+			presentInfo.pWaitSemaphores = renderFinishedSemaphores;
+		}
 
 		// these two arrays run in parallel
 		VkSwapchainKHR swapChains[] = {_swapChain};
@@ -1186,13 +1183,12 @@ private:
 	VkPipeline _graphicsPipeline;
 
 	VkCommandPool _commandPool;
-	std::vector<VkCommandBuffer> _commandBuffers; // one per swapchain image
+	std::vector<VkCommandBuffer> _commandBuffers; // one per swapchain image // TODO: only because we are pre-recording. if the command buffers were filled each frame, we could reduce to one per frame in flight, instead of one per swapchain image
 
 	static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 	std::vector<VkSemaphore> _imageAvailableSemaphores; // one per frame in flight
 	std::vector<VkSemaphore> _renderFinishedSemaphores; // one per frame in flight
 	std::vector<VkFence> _framesInFlightFences; // one per frame in flight
-	std::vector<VkFence> _imagesInFlightFences; // one per swapchain image. is there any frame in flight currently associated to a given swapchain image?
 	uint32_t _currentFrame = 0;
 };
 
