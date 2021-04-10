@@ -1,6 +1,8 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
+#include <glm/glm.hpp>
+
 #include <stdexcept>
 #include <cstdlib>
 #include <vector>
@@ -78,6 +80,7 @@ private:
 		createGraphicsPipelineLayout();
 		createGraphicsPipeline();
 		createCommandPool();
+		createVertexBuffer();
 		createCommandBuffers();
 		createSyncObjects();
 	}
@@ -95,6 +98,8 @@ private:
 	void cleanup()
 	{
 		cleanupSwapChain();
+		vkFreeMemory(_device, _vertexBufferMemory, nullptr);
+		vkDestroyBuffer(_device, _vertexBuffer, nullptr);
 		destroySyncObjects();
 		vkDestroyCommandPool(_device, _commandPool, nullptr);
 		vkDestroyDevice(_device, nullptr);
@@ -106,6 +111,41 @@ private:
 	}
 
 	// VULKAN STUFF ------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	struct Vertex
+	{
+		glm::vec2 pos;
+		glm::vec3 color;
+
+		static VkVertexInputBindingDescription getBindingDescription()
+		{
+			VkVertexInputBindingDescription bindingDescription{};
+			bindingDescription.binding = 0;
+			bindingDescription.stride = sizeof(Vertex);
+			bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+			return bindingDescription;
+		}
+
+		static std::array<VkVertexInputAttributeDescription, 2> getAttributeDescriptions()
+		{
+			std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions{};
+
+			// position
+			attributeDescriptions[0].binding = 0;
+			attributeDescriptions[0].location = 0;
+			attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
+			attributeDescriptions[0].offset = offsetof(Vertex, pos);
+
+			// color
+			attributeDescriptions[1].binding = 0;
+			attributeDescriptions[1].location = 1;
+			attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+			attributeDescriptions[1].offset = offsetof(Vertex, color);
+
+			return attributeDescriptions;
+		}
+	};
 
 	struct QueueFamilies
 	{
@@ -819,12 +859,15 @@ private:
 
 		// vertex input --------------------------------------------------------------------------
 
+		auto bindingDescription = Vertex::getBindingDescription();
+		auto attributeDescriptions = Vertex::getAttributeDescriptions();
+
 		VkPipelineVertexInputStateCreateInfo vertexInputCreateInfo{};
 		vertexInputCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-		vertexInputCreateInfo.vertexBindingDescriptionCount = 0;
-		vertexInputCreateInfo.pVertexBindingDescriptions = nullptr; // Optional
-		vertexInputCreateInfo.vertexAttributeDescriptionCount = 0;
-		vertexInputCreateInfo.pVertexAttributeDescriptions = nullptr; // Optional
+		vertexInputCreateInfo.vertexBindingDescriptionCount = 1;
+		vertexInputCreateInfo.pVertexBindingDescriptions = &bindingDescription;
+		vertexInputCreateInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+		vertexInputCreateInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
 		// input assembly --------------------------------------------------------------------------
 
@@ -1017,9 +1060,15 @@ private:
 
 			vkCmdBindPipeline(_commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, _graphicsPipeline);
 
+			// bind vertex buffer -------------------------------------------
+
+			VkBuffer vertexBuffers[] = {_vertexBuffer};
+			VkDeviceSize offsets[] = {0};
+			vkCmdBindVertexBuffers(_commandBuffers[i], 0, 1, vertexBuffers, offsets); // TODO: link the binding parameters with the bindings we used during buffer creation
+
 			// draw! -------------------------------------------
 
-			vkCmdDraw(_commandBuffers[i], 3, 1, 0, 0);
+			vkCmdDraw(_commandBuffers[i], static_cast<uint32_t>(_vertices.size()), 1, 0, 0);
 
 			// end render pass -------------------------------------------
 
@@ -1199,6 +1248,71 @@ private:
 		createCommandBuffers();
 	}
 
+	uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties)
+	{
+		VkPhysicalDeviceMemoryProperties memProperties;
+		vkGetPhysicalDeviceMemoryProperties(_physicalDevice, &memProperties);
+
+		// TODO: Right now we'll only concern ourselves with the type of memory and not the heap it comes from, but you can imagine that this can affect performance.
+		for(uint32_t i = 0; i < memProperties.memoryTypeCount; ++i)
+		{
+			if((typeFilter & (1 << i)) &&
+				(memProperties.memoryTypes[i].propertyFlags & properties) == properties)
+			{
+				return i;
+			}
+		}
+
+		throw std::runtime_error("failed to find suitable memory type");
+	}
+
+	void createVertexBuffer()
+	{
+		VkBufferCreateInfo bufferCreateInfo{};
+		bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		bufferCreateInfo.size = sizeof(Vertex) * _vertices.size();
+		bufferCreateInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+		bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+		if(vkCreateBuffer(_device, &bufferCreateInfo, nullptr, &_vertexBuffer) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to create vertex buffer");
+		}
+
+		VkMemoryRequirements memRequirements;
+		vkGetBufferMemoryRequirements(_device, _vertexBuffer, &memRequirements);
+
+		VkMemoryAllocateInfo memoryAllocateInfo{};
+		memoryAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		memoryAllocateInfo.allocationSize = memRequirements.size;
+		memoryAllocateInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+		if(vkAllocateMemory(_device, &memoryAllocateInfo, nullptr, &_vertexBufferMemory) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to allocate vertex buffer memory");
+		}
+
+		// TODO: Since this memory is allocated specifically for this the vertex buffer, the offset is simply 0.
+		// If the offset is non-zero, then it is required to be divisible by memRequirements.alignment
+		vkBindBufferMemory(_device, _vertexBuffer, _vertexBufferMemory, 0);
+
+		void* data = nullptr;
+		vkMapMemory(_device, _vertexBufferMemory, 0, bufferCreateInfo.size, 0, &data);
+		memcpy(data, _vertices.data(), (size_t)bufferCreateInfo.size);
+		vkUnmapMemory(_device, _vertexBufferMemory);
+
+		// TODO: the driver may not immediately copy the data into the buffer memory, for example because of caching.
+		// It is also possible that writes to the buffer are not visible in the mapped memory yet.
+		// There are two ways to deal with that problem:
+		// - Use a memory heap that is host coherent, indicated with VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+		// - Call vkFlushMappedMemoryRanges after writing to the mapped memory, and call vkInvalidateMappedMemoryRanges before reading from the mapped memory
+		// We went for the first approach, which ensures that the mapped memory always matches the contents of the allocated memory.
+		// Do keep in mind that this may lead to slightly worse performance than explicit flushing, but we'll see why that doesn't matter in the next chapter.
+		
+		// Flushing memory ranges or using a coherent memory heap means that the driver will be aware of our writes to the buffer, but it doesn't mean that they are actually visible on the GPU yet.
+		// The transfer of data to the GPU is an operation that happens in the background and the specification simply tells us that it is guaranteed to be complete as of the next call to vkQueueSubmit.
+	}
+
 private:
 	std::vector<const char*> _requiredInstanceExtensions;
 
@@ -1241,14 +1355,14 @@ private:
 	VkExtent2D _swapChainExtent;
 	std::vector<VkImageView> _swapChainImageViews; // one per swapchain image
 	
-	VkRenderPass _renderPass;
+	VkRenderPass _renderPass = VK_NULL_HANDLE;
 
 	std::vector<VkFramebuffer> _framebuffers; // one per swapchain image
 
-	VkPipelineLayout _graphicsPipelineLayout;
-	VkPipeline _graphicsPipeline;
+	VkPipelineLayout _graphicsPipelineLayout = VK_NULL_HANDLE;
+	VkPipeline _graphicsPipeline = VK_NULL_HANDLE;
 
-	VkCommandPool _commandPool;
+	VkCommandPool _commandPool = VK_NULL_HANDLE;
 	std::vector<VkCommandBuffer> _commandBuffers; // one per swapchain image // TODO: only because we are pre-recording. if the command buffers were filled each frame, we could reduce to one per frame in flight, instead of one per swapchain image
 
 	static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
@@ -1256,6 +1370,14 @@ private:
 	std::vector<VkSemaphore> _renderFinishedSemaphores; // one per frame in flight
 	std::vector<VkFence> _framesInFlightFences; // one per frame in flight
 	uint32_t _currentFrame = 0;
+
+	const std::vector<Vertex> _vertices = {
+		{{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+		{{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+		{{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+	};
+	VkBuffer _vertexBuffer = VK_NULL_HANDLE;
+	VkDeviceMemory _vertexBufferMemory = VK_NULL_HANDLE;
 };
 
 int main()

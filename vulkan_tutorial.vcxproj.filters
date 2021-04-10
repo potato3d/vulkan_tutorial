@@ -26,10 +26,13 @@
     <None Include="shaders\simple.frag">
       <Filter>Shader Files</Filter>
     </None>
-    <None Include="shaders\simple.vert">
+    <None Include="shaders\hardcoded.vert">
       <Filter>Shader Files</Filter>
     </None>
     <None Include="shaders\compile.bat">
+      <Filter>Shader Files</Filter>
+    </None>
+    <None Include="shaders\simple.vert">
       <Filter>Shader Files</Filter>
     </None>
   </ItemGroup>
