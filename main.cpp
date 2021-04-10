@@ -1078,7 +1078,7 @@ private:
 
 			if(vkEndCommandBuffer(_commandBuffers[i]) != VK_SUCCESS)
 			{
-				throw std::runtime_error("failed to record command buffer");
+				throw std::runtime_error("failed to end recording command buffer");
 			}
 		}
 
@@ -1119,8 +1119,31 @@ private:
 		}
 	}
 
+	void updateFPS()
+	{
+		static char buffer[256] = {};
+
+		double currentTime = glfwGetTime();
+		double delta = currentTime - _fpsLastTime;
+		_fpsFrameCount++;
+		if(delta >= 0.5)
+		{
+			double fps = double(_fpsFrameCount) / delta;
+			double mps = (delta * 1000.0) / double(_fpsFrameCount);
+
+			sprintf_s(buffer, std::size(buffer) - 1, "Vulkan Tutorial - %.2f fps | %.2f ms", fps, mps);
+
+			glfwSetWindowTitle(_window, buffer);
+
+			_fpsFrameCount = 0;
+			_fpsLastTime = currentTime;
+		}
+	}
+
 	void drawFrame()
 	{
+		updateFPS();
+
 		// wait until current frame is finished -----------------------------------------------------
 
 		vkWaitForFences(_device, 1, &_framesInFlightFences[_currentFrame], VK_TRUE, UINT64_MAX);
@@ -1138,7 +1161,7 @@ private:
 		}
 		else if(result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
 		{
-			throw std::runtime_error("failed to acquire swap chain image!");
+			throw std::runtime_error("failed to acquire swap chain image");
 		}
 
 		// submit command buffers to graphics queue -----------------------------------------------------
@@ -1199,7 +1222,7 @@ private:
 		}
 		else if(result != VK_SUCCESS)
 		{
-			throw std::runtime_error("failed to present swap chain image!");
+			throw std::runtime_error("failed to present swap chain image");
 		}
 
 		// goto next frame -----------------------------------------------------
@@ -1266,41 +1289,95 @@ private:
 		throw std::runtime_error("failed to find suitable memory type");
 	}
 
-	void createVertexBuffer()
+	void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory)
 	{
 		VkBufferCreateInfo bufferCreateInfo{};
 		bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-		bufferCreateInfo.size = sizeof(Vertex) * _vertices.size();
-		bufferCreateInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+		bufferCreateInfo.size = size;
+		bufferCreateInfo.usage = usage;
 		bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-		if(vkCreateBuffer(_device, &bufferCreateInfo, nullptr, &_vertexBuffer) != VK_SUCCESS)
+		if(vkCreateBuffer(_device, &bufferCreateInfo, nullptr, &buffer) != VK_SUCCESS)
 		{
-			throw std::runtime_error("failed to create vertex buffer");
+			throw std::runtime_error("failed to create buffer");
 		}
 
+		// TODO: It should be noted that in a real world application, you're not supposed to actually call vkAllocateMemory for every individual buffer.
+		// The maximum number of simultaneous memory allocations is limited by the maxMemoryAllocationCount physical device limit, which may be as low as 4096 even on high end hardware like an NVIDIA GTX 1080.
+		// The right way to allocate memory for a large number of objects at the same time is to create a custom allocator that splits up a single allocation among many different objects by using the offset parameters that we've seen in many functions.
+		// You can either implement such an allocator yourself, or use the VulkanMemoryAllocator library provided by the GPUOpen initiative: https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+
 		VkMemoryRequirements memRequirements;
-		vkGetBufferMemoryRequirements(_device, _vertexBuffer, &memRequirements);
+		vkGetBufferMemoryRequirements(_device, buffer, &memRequirements);
 
 		VkMemoryAllocateInfo memoryAllocateInfo{};
 		memoryAllocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 		memoryAllocateInfo.allocationSize = memRequirements.size;
-		memoryAllocateInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+		memoryAllocateInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
 
-		if(vkAllocateMemory(_device, &memoryAllocateInfo, nullptr, &_vertexBufferMemory) != VK_SUCCESS)
+		if(vkAllocateMemory(_device, &memoryAllocateInfo, nullptr, &bufferMemory) != VK_SUCCESS)
 		{
-			throw std::runtime_error("failed to allocate vertex buffer memory");
+			throw std::runtime_error("failed to allocate buffer memory");
 		}
 
-		// TODO: Since this memory is allocated specifically for this the vertex buffer, the offset is simply 0.
+		// TODO: Since this memory is allocated specifically for this buffer, the offset is simply 0.
 		// If the offset is non-zero, then it is required to be divisible by memRequirements.alignment
-		vkBindBufferMemory(_device, _vertexBuffer, _vertexBufferMemory, 0);
+		vkBindBufferMemory(_device, buffer, bufferMemory, 0);
+	}
 
-		void* data = nullptr;
-		vkMapMemory(_device, _vertexBufferMemory, 0, bufferCreateInfo.size, 0, &data);
-		memcpy(data, _vertices.data(), (size_t)bufferCreateInfo.size);
-		vkUnmapMemory(_device, _vertexBufferMemory);
+	void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size)
+	{
+		// TODO: We must first allocate a temporary command buffer.
+		// You may wish to create a separate command pool for these kinds of short-lived buffers, because the implementation may be able to apply memory allocation optimizations.
+		// Or reuse the same command buffer already created for drawing.
+		VkCommandBufferAllocateInfo bufferAllocateInfo{};
+		bufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+		bufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		bufferAllocateInfo.commandPool = _commandPool;
+		bufferAllocateInfo.commandBufferCount = 1;
 
+		VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+		vkAllocateCommandBuffers(_device, &bufferAllocateInfo, &commandBuffer);
+
+		VkCommandBufferBeginInfo commandBufferBeginInfo{};
+		commandBufferBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		commandBufferBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+		if(vkBeginCommandBuffer(commandBuffer, &commandBufferBeginInfo) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to begin recording command buffer");
+		}
+
+		VkBufferCopy copyRegion{};
+		copyRegion.srcOffset = 0; // Optional
+		copyRegion.dstOffset = 0; // Optional
+		copyRegion.size = size;
+		vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+
+		if(vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to end recording command buffer");
+		}
+
+		VkSubmitInfo submitInfo{};
+		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		submitInfo.commandBufferCount = 1;
+		submitInfo.pCommandBuffers = &commandBuffer;
+
+		if(vkQueueSubmit(_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to submit copy command buffer");
+		}
+		// TODO: We could use a fence and wait with vkWaitForFences, or simply wait for the transfer queue to become idle with vkQueueWaitIdle.
+		// A fence would allow you to schedule multiple transfers simultaneously and wait for all of them complete, instead of executing one at a time.
+		// That may give the driver more opportunities to optimize.
+		vkQueueWaitIdle(_graphicsQueue);
+
+		vkFreeCommandBuffers(_device, _commandPool, 1, &commandBuffer);
+	}
+
+	void createVertexBuffer()
+	{
 		// TODO: the driver may not immediately copy the data into the buffer memory, for example because of caching.
 		// It is also possible that writes to the buffer are not visible in the mapped memory yet.
 		// There are two ways to deal with that problem:
@@ -1308,12 +1385,33 @@ private:
 		// - Call vkFlushMappedMemoryRanges after writing to the mapped memory, and call vkInvalidateMappedMemoryRanges before reading from the mapped memory
 		// We went for the first approach, which ensures that the mapped memory always matches the contents of the allocated memory.
 		// Do keep in mind that this may lead to slightly worse performance than explicit flushing, but we'll see why that doesn't matter in the next chapter.
-		
+
 		// Flushing memory ranges or using a coherent memory heap means that the driver will be aware of our writes to the buffer, but it doesn't mean that they are actually visible on the GPU yet.
 		// The transfer of data to the GPU is an operation that happens in the background and the specification simply tells us that it is guaranteed to be complete as of the next call to vkQueueSubmit.
+
+		VkDeviceSize bufferSize = sizeof(Vertex) * _vertices.size();
+
+		VkBuffer stagingBuffer = VK_NULL_HANDLE;
+		VkDeviceMemory stagingBufferMemory = VK_NULL_HANDLE;
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+
+		void* data = nullptr;
+		vkMapMemory(_device, stagingBufferMemory, 0, bufferSize, 0, &data);
+		memcpy(data, _vertices.data(), (size_t)bufferSize);
+		vkUnmapMemory(_device, stagingBufferMemory);
+
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, _vertexBuffer, _vertexBufferMemory);
+
+		copyBuffer(stagingBuffer, _vertexBuffer, bufferSize);
+
+		vkFreeMemory(_device, stagingBufferMemory, nullptr);
+		vkDestroyBuffer(_device, stagingBuffer, nullptr);
 	}
 
 private:
+	double _fpsLastTime = 0.0;
+	uint32_t _fpsFrameCount = 0;
+
 	std::vector<const char*> _requiredInstanceExtensions;
 
 	std::vector<const char*> _requiredValidationLayers = {
