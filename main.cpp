@@ -81,6 +81,7 @@ private:
 		createGraphicsPipeline();
 		createCommandPool();
 		createVertexBuffer();
+		createIndexBuffer();
 		createCommandBuffers();
 		createSyncObjects();
 	}
@@ -98,8 +99,8 @@ private:
 	void cleanup()
 	{
 		cleanupSwapChain();
-		vkFreeMemory(_device, _vertexBufferMemory, nullptr);
-		vkDestroyBuffer(_device, _vertexBuffer, nullptr);
+		destroyIndexBuffer();
+		destroyVertexBuffer();
 		destroySyncObjects();
 		vkDestroyCommandPool(_device, _commandPool, nullptr);
 		vkDestroyDevice(_device, nullptr);
@@ -1066,9 +1067,13 @@ private:
 			VkDeviceSize offsets[] = {0};
 			vkCmdBindVertexBuffers(_commandBuffers[i], 0, 1, vertexBuffers, offsets); // TODO: link the binding parameters with the bindings we used during buffer creation
 
+			// bind index buffer -------------------------------------------
+
+			vkCmdBindIndexBuffer(_commandBuffers[i], _indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+
 			// draw! -------------------------------------------
 
-			vkCmdDraw(_commandBuffers[i], static_cast<uint32_t>(_vertices.size()), 1, 0, 0);
+			vkCmdDrawIndexed(_commandBuffers[i], static_cast<uint32_t>(_indices.size()), 1, 0, 0, 0);
 
 			// end render pass -------------------------------------------
 
@@ -1389,7 +1394,7 @@ private:
 		// Flushing memory ranges or using a coherent memory heap means that the driver will be aware of our writes to the buffer, but it doesn't mean that they are actually visible on the GPU yet.
 		// The transfer of data to the GPU is an operation that happens in the background and the specification simply tells us that it is guaranteed to be complete as of the next call to vkQueueSubmit.
 
-		VkDeviceSize bufferSize = sizeof(Vertex) * _vertices.size();
+		VkDeviceSize bufferSize = sizeof(decltype(_vertices)::value_type) * _vertices.size();
 
 		VkBuffer stagingBuffer = VK_NULL_HANDLE;
 		VkDeviceMemory stagingBufferMemory = VK_NULL_HANDLE;
@@ -1406,6 +1411,45 @@ private:
 
 		vkFreeMemory(_device, stagingBufferMemory, nullptr);
 		vkDestroyBuffer(_device, stagingBuffer, nullptr);
+	}
+
+	void destroyVertexBuffer()
+	{
+		vkFreeMemory(_device, _vertexBufferMemory, nullptr);
+		vkDestroyBuffer(_device, _vertexBuffer, nullptr);
+	}
+
+	void createIndexBuffer()
+	{
+		// TODO: Remember you should allocate multiple resources like buffers from a single memory allocation, but in fact you should go a step further.
+		// Driver developers recommend that you also store multiple buffers, like the vertex and index buffer, into a single VkBuffer and use offsets in commands like vkCmdBindVertexBuffers.
+		// The advantage is that your data is more cache friendly in that case, because it's closer together.
+		// It is even possible to reuse the same chunk of memory for multiple resources if they are not used during the same render operations, provided that their data is refreshed, of course.
+		// This is known as aliasing and some Vulkan functions have explicit flags to specify that you want to do this.
+
+		VkDeviceSize bufferSize = sizeof(decltype(_indices)::value_type) * _indices.size();
+
+		VkBuffer stagingBuffer;
+		VkDeviceMemory stagingBufferMemory;
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+
+		void* data = nullptr;
+		vkMapMemory(_device, stagingBufferMemory, 0, bufferSize, 0, &data);
+		memcpy(data, _indices.data(), (size_t)bufferSize);
+		vkUnmapMemory(_device, stagingBufferMemory);
+
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, _indexBuffer, _indexBufferMemory);
+
+		copyBuffer(stagingBuffer, _indexBuffer, bufferSize);
+
+		vkDestroyBuffer(_device, stagingBuffer, nullptr);
+		vkFreeMemory(_device, stagingBufferMemory, nullptr);
+	}
+
+	void destroyIndexBuffer()
+	{
+		vkFreeMemory(_device, _indexBufferMemory, nullptr);
+		vkDestroyBuffer(_device, _indexBuffer, nullptr);
 	}
 
 private:
@@ -1470,12 +1514,18 @@ private:
 	uint32_t _currentFrame = 0;
 
 	const std::vector<Vertex> _vertices = {
-		{{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-		{{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-		{{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+		{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+		{{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+		{{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+		{{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+	};
+	const std::vector<uint16_t> _indices = {
+        0, 1, 2, 2, 3, 0
 	};
 	VkBuffer _vertexBuffer = VK_NULL_HANDLE;
 	VkDeviceMemory _vertexBufferMemory = VK_NULL_HANDLE;
+	VkBuffer _indexBuffer = VK_NULL_HANDLE;
+	VkDeviceMemory _indexBufferMemory = VK_NULL_HANDLE;
 };
 
 int main()
