@@ -44,13 +44,21 @@ public:
 	}
 
 private:
+	static void framebufferResizeCallback(GLFWwindow* window, int width, int height)
+	{
+		auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+		app->_windowResized = true;
+	}
+
 	void initWindow()
 	{
 		glfwInit();
 
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-		glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 		_window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan Tutorial", nullptr, nullptr);
+		
+		glfwSetWindowUserPointer(_window, this);
+		glfwSetFramebufferSizeCallback(_window, framebufferResizeCallback);
 
 		uint32_t glfwExtensionCount = 0;
 		const char** glfwExtensionNames = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
@@ -86,14 +94,9 @@ private:
 
 	void cleanup()
 	{
+		cleanupSwapChain();
 		destroySyncObjects();
 		vkDestroyCommandPool(_device, _commandPool, nullptr);
-		vkDestroyPipeline(_device, _graphicsPipeline, nullptr);
-		vkDestroyPipelineLayout(_device, _graphicsPipelineLayout, nullptr);
-		destroyFramebuffers();
-		vkDestroyRenderPass(_device, _renderPass, nullptr);
-		destroySwapChainImageViews();
-		vkDestroySwapchainKHR(_device, _swapChain, nullptr);
 		vkDestroyDevice(_device, nullptr);
 		vkDestroySurfaceKHR(_instance, _surface, nullptr);
 		destroyDebugMessenger();
@@ -1077,7 +1080,17 @@ private:
 		// acquire next image from swap chain -----------------------------------------------------
 
 		uint32_t imageIndex = 0;
-		vkAcquireNextImageKHR(_device, _swapChain, UINT64_MAX, _imageAvailableSemaphores[_currentFrame], VK_NULL_HANDLE, &imageIndex);
+		VkResult result = vkAcquireNextImageKHR(_device, _swapChain, UINT64_MAX, _imageAvailableSemaphores[_currentFrame], VK_NULL_HANDLE, &imageIndex);
+
+		if(result == VK_ERROR_OUT_OF_DATE_KHR)
+		{
+			recreateSwapChain();
+			return;
+		}
+		else if(result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
+		{
+			throw std::runtime_error("failed to acquire swap chain image!");
+		}
 
 		// submit command buffers to graphics queue -----------------------------------------------------
 
@@ -1128,11 +1141,62 @@ private:
 
 		presentInfo.pResults = nullptr; // Optional
 
-		vkQueuePresentKHR(_presentQueue, &presentInfo);
+		result = vkQueuePresentKHR(_presentQueue, &presentInfo);
+
+		if(result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || _windowResized)
+		{
+			_windowResized = false;
+			recreateSwapChain();
+		}
+		else if(result != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to present swap chain image!");
+		}
 
 		// goto next frame -----------------------------------------------------
 
 		_currentFrame = (_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+	}
+
+	void cleanupSwapChain()
+	{
+		destroyFramebuffers();
+		vkFreeCommandBuffers(_device, _commandPool, static_cast<uint32_t>(_commandBuffers.size()), _commandBuffers.data());
+		vkDestroyPipeline(_device, _graphicsPipeline, nullptr);
+		vkDestroyPipelineLayout(_device, _graphicsPipelineLayout, nullptr);
+		vkDestroyRenderPass(_device, _renderPass, nullptr);
+		destroySwapChainImageViews();
+		vkDestroySwapchainKHR(_device, _swapChain, nullptr);
+	}
+
+	void recreateSwapChain()
+	{
+		int width = 0, height = 0;
+		glfwGetFramebufferSize(_window, &width, &height);
+		while(width == 0 || height == 0)
+		{
+			glfwGetFramebufferSize(_window, &width, &height);
+			glfwWaitEvents();
+		}
+
+		// TODO: It is possible to create a new swap chain while drawing commands on an image from the old swap chain are still in-flight.
+		// You need to pass the previous swap chain to the oldSwapChain field in the VkSwapchainCreateInfoKHR struct and destroy the old swap chain as soon as you've finished using it.
+		vkDeviceWaitIdle(_device);
+
+		cleanupSwapChain();
+
+		if(!checkPhysicalDeviceSwapChain(_physicalDevice, _swapChainInfo))
+		{
+			throw std::runtime_error("swapchain is not compatible anymore");
+		}
+
+		createSwapChain();
+		createSwapChainImageViews();
+		createRenderPass();
+		createGraphicsPipelineLayout();
+		createGraphicsPipeline();
+		createFramebuffers();
+		createCommandBuffers();
 	}
 
 private:
@@ -1158,6 +1222,8 @@ private:
 	static constexpr uint32_t HEIGHT = 600;
 	GLFWwindow* _window = nullptr;
 	VkSurfaceKHR _surface = VK_NULL_HANDLE;
+
+	bool _windowResized = false;
 
 	VkInstance _instance = VK_NULL_HANDLE;
 	
