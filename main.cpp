@@ -1,7 +1,10 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE // change projection computations to Vulkan [0, 1] standard range instead of OpenGL [-1, 1] standard range.
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <stdexcept>
 #include <cstdlib>
@@ -11,6 +14,7 @@
 #include <unordered_set>
 #include <iterator>
 #include <fstream>
+#include <chrono>
 
 static VkResult CreateDebugUtilsMessengerEXT(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, const VkAllocationCallbacks* pAllocator, VkDebugUtilsMessengerEXT* pDebugMessenger)
 {
@@ -77,13 +81,18 @@ private:
 		createSwapChainImageViews();
 		createRenderPass();
 		createFramebuffers();
+		createDescriptorSetLayout();
 		createGraphicsPipelineLayout();
 		createGraphicsPipeline();
 		createCommandPool();
 		createVertexBuffer();
 		createIndexBuffer();
+		createUniformBuffers();
+		createDescriptorPool();
+		createDescriptorSets();
 		createCommandBuffers();
 		createSyncObjects();
+		// TODO: maybe should create buffers before descriptor set layout and pool so that we can then create the graphics pipeline with every information we need
 	}
 
 	void mainLoop()
@@ -99,10 +108,11 @@ private:
 	void cleanup()
 	{
 		cleanupSwapChain();
+		destroySyncObjects();
 		destroyIndexBuffer();
 		destroyVertexBuffer();
-		destroySyncObjects();
 		vkDestroyCommandPool(_device, _commandPool, nullptr);
+		vkDestroyDescriptorSetLayout(_device, _descriptorSetLayout, nullptr);
 		vkDestroyDevice(_device, nullptr);
 		vkDestroySurfaceKHR(_instance, _surface, nullptr);
 		destroyDebugMessenger();
@@ -112,6 +122,21 @@ private:
 	}
 
 	// VULKAN STUFF ------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+	struct QueueFamilies
+	{
+		std::vector<VkQueueFamilyProperties> properties;
+		std::vector<VkBool32> supportsPresentation;
+		std::optional<uint32_t> graphics;
+		std::optional<uint32_t> present;
+	};
+
+	struct SwapChainInfo
+	{
+		VkSurfaceCapabilitiesKHR capabilities;
+		std::vector<VkSurfaceFormatKHR> formats;
+		std::vector<VkPresentModeKHR> presentModes;
+	};
 
 	struct Vertex
 	{
@@ -148,19 +173,11 @@ private:
 		}
 	};
 
-	struct QueueFamilies
+	struct UniformBufferObject
 	{
-		std::vector<VkQueueFamilyProperties> properties;
-		std::vector<VkBool32> supportsPresentation;
-		std::optional<uint32_t> graphics;
-		std::optional<uint32_t> present;
-	};
-
-	struct SwapChainInfo
-	{
-		VkSurfaceCapabilitiesKHR capabilities;
-		std::vector<VkSurfaceFormatKHR> formats;
-		std::vector<VkPresentModeKHR> presentModes;
+		glm::mat4 model;
+		glm::mat4 view;
+		glm::mat4 proj;
 	};
 
 	void checkRequiredInstanceExtensions()
@@ -773,10 +790,16 @@ private:
 
 	void createGraphicsPipelineLayout()
 	{
+		// TODO: It is actually possible to bind multiple descriptor sets simultaneously.
+		// You need to specify a descriptor layout for each descriptor set when creating the pipeline layout. 
+		// Shaders can then reference specific descriptor sets like this:
+		//    layout(set = 0, binding = 0) uniform UniformBufferObject { ... }
+		// You can use this feature to put descriptors that vary per-object and descriptors that are shared into separate descriptor sets.
+		// In that case you avoid rebinding most of the descriptors across draw calls which is potentially more efficient.
 		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
 		pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-		pipelineLayoutCreateInfo.setLayoutCount = 0; // Optional
-		pipelineLayoutCreateInfo.pSetLayouts = nullptr; // Optional
+		pipelineLayoutCreateInfo.setLayoutCount = 1;
+		pipelineLayoutCreateInfo.pSetLayouts = &_descriptorSetLayout;
 		pipelineLayoutCreateInfo.pushConstantRangeCount = 0; // Optional
 		pipelineLayoutCreateInfo.pPushConstantRanges = nullptr; // Optional
 
@@ -833,7 +856,7 @@ private:
 	{
 		// vertex shader --------------------------------------------------------------------------
 
-		auto vertShaderCode = readSPV("shaders/simple.vert.spv");
+		auto vertShaderCode = readSPV("shaders/ubo.vert.spv");
 		VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
 
 		VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
@@ -1071,6 +1094,11 @@ private:
 
 			vkCmdBindIndexBuffer(_commandBuffers[i], _indexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
+			// bind descriptor sets -------------------------------------------
+
+			// TODO: 4th parameter must match the layout(set) used in the shader?
+			vkCmdBindDescriptorSets(_commandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, _graphicsPipelineLayout, 0, 1, &_descriptorSets[i], 0, nullptr);
+
 			// draw! -------------------------------------------
 
 			vkCmdDrawIndexed(_commandBuffers[i], static_cast<uint32_t>(_indices.size()), 1, 0, 0, 0);
@@ -1169,6 +1197,11 @@ private:
 			throw std::runtime_error("failed to acquire swap chain image");
 		}
 
+		// update UBOs -----------------------------------------------------
+
+		// The updateUniformBuffer takes care of screen resizing, so we don't need to recreate the descriptor set in recreateSwapChain.
+		updateUniformBuffer(imageIndex);
+
 		// submit command buffers to graphics queue -----------------------------------------------------
 
 		VkSubmitInfo submitInfo{};
@@ -1237,17 +1270,22 @@ private:
 
 	void cleanupSwapChain()
 	{
-		destroyFramebuffers();
+		vkDestroyDescriptorPool(_device, _descriptorPool, nullptr);
+		destroyUniformBuffers();
 		vkFreeCommandBuffers(_device, _commandPool, static_cast<uint32_t>(_commandBuffers.size()), _commandBuffers.data());
 		vkDestroyPipeline(_device, _graphicsPipeline, nullptr);
 		vkDestroyPipelineLayout(_device, _graphicsPipelineLayout, nullptr);
 		vkDestroyRenderPass(_device, _renderPass, nullptr);
+		destroyFramebuffers();
 		destroySwapChainImageViews();
 		vkDestroySwapchainKHR(_device, _swapChain, nullptr);
 	}
 
 	void recreateSwapChain()
 	{
+		// TODO: review this entire process, check other demos and source codes, etc.
+		// I'm sure this can be simplified and made more efficient
+
 		int width = 0, height = 0;
 		glfwGetFramebufferSize(_window, &width, &height);
 		while(width == 0 || height == 0)
@@ -1273,6 +1311,9 @@ private:
 		createGraphicsPipelineLayout();
 		createGraphicsPipeline();
 		createFramebuffers();
+		createUniformBuffers();
+		createDescriptorPool();
+		createDescriptorSets();
 		createCommandBuffers();
 	}
 
@@ -1452,6 +1493,234 @@ private:
 		vkDestroyBuffer(_device, _indexBuffer, nullptr);
 	}
 
+	void createDescriptorSetLayout()
+	{
+		// Each descriptor set may have multiple resources of the same or different type.
+		// What type of resources can be bound through a descriptor set is defined in a descriptor set layout.
+		// There, through a VkDescriptorSetLayoutBinding structure, You specify a given type of a resource (for example sampler, storage image or uniform buffer) and the number of resources of this type accessed as an array inside shader.
+		// You can also specify multiple resources of the same or different types as separate layout entries (multiple VkDescriptorSetLayoutBinding entries specified during layout creation).
+		// Each such descriptor must use a separate, different binding.
+		// And the same binding must be used inside shader to access given resource:
+		//   layout(set = S, binding = B) uniform <variable_type> <variable_name>;
+		// So, to sum that up:
+		//   You can have an(homogenous) array of a single descriptor type
+		//   You can have several "bindings" which each can hold any descriptor type resource(or their array)
+		//   And as one more layer of indirection you can have several descriptor sets each with its own bindings
+		// Rule of thumb is probably "less is more".
+		// If you do not need the resources to have separate types or names, use array.
+		// If you do not need separate set, use only one set.
+
+		// example shader code:
+		//
+		//	// binding to a single sampled image descriptor in set 0
+		//	layout(set = 0, binding = 0) uniform texture2D mySampledImage;
+		//
+		//	// binding to an array of sampled image descriptors in set 0
+		//	layout(set = 0, binding = 1) uniform texture2D myArrayOfSampledImages[12];
+		//
+		//	// binding to a single uniform buffer descriptor in set 1
+		//	layout(set = 1, binding = 0) uniform myUniformBuffer
+		//	{
+		//		 vec4 myElement[32];
+		//	};
+		// 
+		// correspinding example API code:
+		//
+		//	const VkDescriptorSetLayoutBinding myDescriptorSetLayoutBinding[] =
+		//	{
+		//		// binding to a single image descriptor
+		//		{
+		//			0,                                      // binding
+		//			VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,       // descriptorType
+		//			1,                                      // descriptorCount
+		//			VK_SHADER_STAGE_FRAGMENT_BIT,           // stageFlags
+		//			NULL                                    // pImmutableSamplers
+		//		},
+		//		// binding to an array of image descriptors
+		//		{
+		//			1,                                      // binding
+		//			VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,       // descriptorType
+		//			12,                                     // descriptorCount
+		//			VK_SHADER_STAGE_FRAGMENT_BIT,           // stageFlags
+		//			NULL                                    // pImmutableSamplers
+		//		},
+		//		// binding to a single uniform buffer descriptor
+		//		{
+		//			0,                                      // binding
+		//			VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,      // descriptorType
+		//			1,                                      // descriptorCount
+		//			VK_SHADER_STAGE_FRAGMENT_BIT,           // stageFlags
+		//			NULL                                    // pImmutableSamplers
+		//		}
+		//	};
+		//	const VkDescriptorSetLayoutCreateInfo myDescriptorSetLayoutCreateInfo[] =
+		//	{
+		//		// Create info for first descriptor set with two descriptor bindings
+		//		{
+		//			VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,    // sType
+		//			NULL,                                                   // pNext
+		//			0,                                                      // flags
+		//			2,                                                      // bindingCount
+		//			&myDescriptorSetLayoutBinding[0]                        // pBindings
+		//		},
+		//		// Create info for second descriptor set with one descriptor binding
+		//		{
+		//			VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,    // sType
+		//			NULL,                                                   // pNext
+		//			0,                                                      // flags
+		//			1,                                                      // bindingCount
+		//			&myDescriptorSetLayoutBinding[2]                        // pBindings
+		//		}
+		//	};
+		//	VkDescriptorSetLayout myDescriptorSetLayout[2];
+		//	//
+		//	// Create first descriptor set layout
+		//	//
+		//	myResult = vkCreateDescriptorSetLayout(
+		//		myDevice,
+		//		&myDescriptorSetLayoutCreateInfo[0],
+		//		NULL,
+		//		&myDescriptorSetLayout[0]);
+		//	//
+		//	// Create second descriptor set layout
+		//	//
+		//	myResult = vkCreateDescriptorSetLayout(
+		//		myDevice,
+		//		&myDescriptorSetLayoutCreateInfo[1],
+		//		NULL,
+		//		&myDescriptorSetLayout[1]);
+
+		// TODO: It is possible for the shader variable to represent an array of uniform buffer objects, and descriptorCount specifies the number of values in the array.
+		// This could be used to specify a transformation for each of the bones in a skeleton for skeletal animation, for example.
+		// Our MVP transformation is in a single uniform buffer object, so we're using a descriptorCount of 1.
+		VkDescriptorSetLayoutBinding uboLayoutBinding{};
+		uboLayoutBinding.binding = 0; // // must match layout(binding) used in the shader
+		uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		uboLayoutBinding.descriptorCount = 1;
+		uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+		uboLayoutBinding.pImmutableSamplers = nullptr; // Optional
+
+		VkDescriptorSetLayoutCreateInfo layoutCreateInfo{};
+		layoutCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		layoutCreateInfo.bindingCount = 1;
+		layoutCreateInfo.pBindings = &uboLayoutBinding;
+
+		if(vkCreateDescriptorSetLayout(_device, &layoutCreateInfo, nullptr, &_descriptorSetLayout) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to create descriptor set layout");
+		}
+	}
+
+	void createUniformBuffers()
+	{
+		VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+
+		_uniformBuffers.resize(_swapChainImages.size());
+		_uniformBuffersMemory.resize(_swapChainImages.size());
+
+		for(size_t i = 0; i < _swapChainImages.size(); i++)
+		{
+			createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, _uniformBuffers[i], _uniformBuffersMemory[i]);
+		}
+	}
+
+	void destroyUniformBuffers()
+	{
+		for(size_t i = 0; i < _swapChainImages.size(); i++)
+		{
+			vkDestroyBuffer(_device, _uniformBuffers[i], nullptr);
+			vkFreeMemory(_device, _uniformBuffersMemory[i], nullptr);
+		}
+	}
+
+	void updateUniformBuffer(uint32_t currentImage)
+	{
+		// TODO: Using a UBO this way is not the most efficient way to pass frequently changing values to the shader.
+		// A more efficient way to pass a small buffer of data to shaders are push constants.
+		// Check these out in the future.
+
+		// TODO: For host-to-device memory operations, you need to perform a form of synchronization known as a "domain operation".
+		// Fortunately, vkQueueSubmit automatically performs a domain operation on any host writes made visible before the vkQueueSubmit call.
+		// So if you write stuff to GPU-visible memory, then call vkQueueSubmit (either in the same thread or via CPU-side inter-thread communication), any commands in that submit call (or later ones) will see the values you wrote.
+		// Assuming you have made them visible. Writes to host - coherent memory are always visible to the GPU, but writes to non - coherent memory must be made visible via a call to vkFlushMappedMemoryRanges.
+		// If you want to write to memory asynchronously to the GPU process that reads it, you'll need to use an event.
+		// You write to the memory, make it visible if needs be, then set the event.
+		// The GPU commands that read from it would wait on the event, using VK_ACCESS_HOST_WRITE_BIT as the source access, and VK_PIPELINE_STAGE_HOST_BIT as the source stage.
+		// The destination access and stage are determined by how you plan to read from it.
+
+		static auto startTime = std::chrono::high_resolution_clock::now();
+
+		auto currentTime = std::chrono::high_resolution_clock::now();
+		float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+
+		UniformBufferObject ubo{};
+		ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		ubo.proj = glm::perspective(glm::radians(45.0f), _swapChainExtent.width / (float)_swapChainExtent.height, 0.1f, 10.0f);
+
+		void* data;
+		vkMapMemory(_device, _uniformBuffersMemory[currentImage], 0, sizeof(ubo), 0, &data);
+		memcpy(data, &ubo, sizeof(ubo));
+		vkUnmapMemory(_device, _uniformBuffersMemory[currentImage]);
+	}
+
+	void createDescriptorPool()
+	{
+		VkDescriptorPoolSize poolSize{};
+		poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		poolSize.descriptorCount = static_cast<uint32_t>(_swapChainImages.size());
+
+		VkDescriptorPoolCreateInfo poolCreateInfo{};
+		poolCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+		poolCreateInfo.poolSizeCount = 1;
+		poolCreateInfo.pPoolSizes = &poolSize;
+		poolCreateInfo.maxSets = static_cast<uint32_t>(_swapChainImages.size());
+
+		if(vkCreateDescriptorPool(_device, &poolCreateInfo, nullptr, &_descriptorPool) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to create descriptor pool");
+		}
+	}
+
+	void createDescriptorSets()
+	{
+		std::vector<VkDescriptorSetLayout> layouts(_swapChainImages.size(), _descriptorSetLayout);
+		
+		VkDescriptorSetAllocateInfo descriptorSetAllocateInfo{};
+		descriptorSetAllocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+		descriptorSetAllocateInfo.descriptorPool = _descriptorPool;
+		descriptorSetAllocateInfo.descriptorSetCount = static_cast<uint32_t>(_swapChainImages.size());
+		descriptorSetAllocateInfo.pSetLayouts = layouts.data();
+
+		_descriptorSets.resize(layouts.size(), VK_NULL_HANDLE);
+		if(vkAllocateDescriptorSets(_device, &descriptorSetAllocateInfo, _descriptorSets.data()) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to allocate descriptor sets");
+		}
+
+		for(size_t i = 0; i < _swapChainImages.size(); ++i)
+		{
+			VkDescriptorBufferInfo bufferInfo{};
+			bufferInfo.buffer = _uniformBuffers[i];
+			bufferInfo.offset = 0;
+			bufferInfo.range = sizeof(UniformBufferObject);
+
+			// The pBufferInfo field is used for descriptors that refer to buffer data, pImageInfo is used for descriptors that refer to image data, and pTexelBufferView is used for descriptors that refer to buffer views.
+			VkWriteDescriptorSet descriptorWrite{};
+			descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptorWrite.dstSet = _descriptorSets[i];
+			descriptorWrite.dstBinding = 0; // must match layout(binding) used in the shader
+			descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			descriptorWrite.dstArrayElement = 0; // if the descriptor is an array, start index in array
+			descriptorWrite.descriptorCount = 1; // if the descriptor is an array, number of elements to update in array
+			descriptorWrite.pBufferInfo = &bufferInfo; // descriptorCount structures
+			descriptorWrite.pImageInfo = nullptr; // alternative to pBufferInfo and pTexelBufferView
+			descriptorWrite.pTexelBufferView = nullptr; // alternative to pBufferInfo and pImageInfo
+
+			vkUpdateDescriptorSets(_device, 1, &descriptorWrite, 0, nullptr);
+		}
+	}
+
 private:
 	double _fpsLastTime = 0.0;
 	uint32_t _fpsFrameCount = 0;
@@ -1501,6 +1770,7 @@ private:
 
 	std::vector<VkFramebuffer> _framebuffers; // one per swapchain image
 
+	VkDescriptorSetLayout _descriptorSetLayout = VK_NULL_HANDLE;
 	VkPipelineLayout _graphicsPipelineLayout = VK_NULL_HANDLE;
 	VkPipeline _graphicsPipeline = VK_NULL_HANDLE;
 
@@ -1526,6 +1796,12 @@ private:
 	VkDeviceMemory _vertexBufferMemory = VK_NULL_HANDLE;
 	VkBuffer _indexBuffer = VK_NULL_HANDLE;
 	VkDeviceMemory _indexBufferMemory = VK_NULL_HANDLE;
+
+	std::vector<VkBuffer> _uniformBuffers; // one per swapchain image // TODO: only because we are pre-recording. if the command buffers were filled each frame, we could reduce to one per frame in flight, instead of one per swapchain image
+	std::vector<VkDeviceMemory> _uniformBuffersMemory; // one per swapchain image // TODO: only because we are pre-recording. if the command buffers were filled each frame, we could reduce to one per frame in flight, instead of one per swapchain image
+	
+	VkDescriptorPool _descriptorPool = VK_NULL_HANDLE;
+	std::vector<VkDescriptorSet> _descriptorSets;
 };
 
 int main()
