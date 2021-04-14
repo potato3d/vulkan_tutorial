@@ -38,9 +38,15 @@
     <None Include="shaders\ubo.vert">
       <Filter>Shader Files</Filter>
     </None>
+    <None Include="shaders\ubo_texture.vert">
+      <Filter>Shader Files</Filter>
+    </None>
+    <None Include="shaders\simple_texture.frag">
+      <Filter>Shader Files</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="FpsCounter.h">
+    <ClInclude Include="stb_image.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
