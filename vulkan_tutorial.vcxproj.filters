@@ -44,6 +44,9 @@
     <None Include="shaders\simple_texture.frag">
       <Filter>Shader Files</Filter>
     </None>
+    <None Include="shaders\ubo_texture_3d.vert">
+      <Filter>Shader Files</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="stb_image.h">
