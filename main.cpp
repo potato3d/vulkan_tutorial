@@ -5,6 +5,14 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE // change projection computations to Vulkan [0, 1] standard range instead of OpenGL [-1, 1] standard range.
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/hash.hpp>
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
+#define TINYOBJLOADER_IMPLEMENTATION
+#include "tiny_obj_loader.h"
 
 #include <stdexcept>
 #include <cstdlib>
@@ -16,9 +24,6 @@
 #include <fstream>
 #include <chrono>
 #include <functional>
-
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
 
 template<typename Func>
 class ScopeExit
@@ -48,6 +53,66 @@ static void DestroyDebugUtilsMessengerEXT(VkInstance instance, VkDebugUtilsMesse
 	{
 		func(instance, debugMessenger, pAllocator);
 	}
+}
+
+struct Vertex
+{
+	glm::vec3 pos;
+	glm::vec3 color;
+	glm::vec2 texCoord;
+
+	static VkVertexInputBindingDescription getBindingDescription()
+	{
+		VkVertexInputBindingDescription bindingDescription{};
+		bindingDescription.binding = 0;
+		bindingDescription.stride = sizeof(Vertex);
+		bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+		return bindingDescription;
+	}
+
+	static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions()
+	{
+		std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
+
+		// position
+		attributeDescriptions[0].binding = 0;
+		attributeDescriptions[0].location = 0;
+		attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+		attributeDescriptions[0].offset = offsetof(Vertex, pos);
+
+		// color
+		attributeDescriptions[1].binding = 0;
+		attributeDescriptions[1].location = 1;
+		attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+		attributeDescriptions[1].offset = offsetof(Vertex, color);
+
+		// texture coordinate
+		attributeDescriptions[2].binding = 0;
+		attributeDescriptions[2].location = 2;
+		attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
+		attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
+
+		return attributeDescriptions;
+	}
+
+	bool operator==(const Vertex& other) const
+	{
+		return pos == other.pos && color == other.color && texCoord == other.texCoord;
+	}
+};
+
+namespace std
+{
+	template<> struct hash<Vertex>
+	{
+		size_t operator()(Vertex const& vertex) const
+		{
+			return ((hash<glm::vec3>()(vertex.pos) ^
+				(hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^
+				(hash<glm::vec2>()(vertex.texCoord) << 1);
+		}
+	};
 }
 
 class HelloTriangleApplication
@@ -101,6 +166,7 @@ private:
 		createTextureImage();
 		createTextureImageView();
 		createTextureSampler();
+		loadModel();
 		createVertexBuffer();
 		createIndexBuffer();
 		createUniformBuffers();
@@ -155,48 +221,6 @@ private:
 		VkSurfaceCapabilitiesKHR capabilities;
 		std::vector<VkSurfaceFormatKHR> formats;
 		std::vector<VkPresentModeKHR> presentModes;
-	};
-
-	struct Vertex
-	{
-		glm::vec3 pos;
-		glm::vec3 color;
-		glm::vec2 texCoord;
-
-		static VkVertexInputBindingDescription getBindingDescription()
-		{
-			VkVertexInputBindingDescription bindingDescription{};
-			bindingDescription.binding = 0;
-			bindingDescription.stride = sizeof(Vertex);
-			bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-			return bindingDescription;
-		}
-
-		static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions()
-		{
-			std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
-
-			// position
-			attributeDescriptions[0].binding = 0;
-			attributeDescriptions[0].location = 0;
-			attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-			attributeDescriptions[0].offset = offsetof(Vertex, pos);
-
-			// color
-			attributeDescriptions[1].binding = 0;
-			attributeDescriptions[1].location = 1;
-			attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-			attributeDescriptions[1].offset = offsetof(Vertex, color);
-
-			// texture coordinate
-			attributeDescriptions[2].binding = 0;
-			attributeDescriptions[2].location = 2;
-			attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
-			attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
-
-			return attributeDescriptions;
-		}
 	};
 
 	struct UniformBufferObject
@@ -969,11 +993,18 @@ private:
 
 		// viewport --------------------------------------------------------------------------
 
+		// The viewport’s origin in OpenGL is in the lower left of the screen, with Y pointing up.
+		// In Vulkan the origin is in the top left of the screen, with Y pointing downwards.
+		// If we want to define front faces as Counter-Clockwise and cull back faces, we need to invert Vulkan coordinates
+		// Instead of inverting gl_Position.y in every shader, we can use a negative value in viewport.height
+		// Note: this requires VK_KHR_Maintenance1 extension for Vulkan 1.0, which is core in Vulkan 1.1, and we are already requiring Vulkan 1.2 or greater
+		// ref: https://www.saschawillems.de/blog/2019/03/29/flipping-the-vulkan-viewport/
+
 		VkViewport viewport{};
 		viewport.x = 0.0f;
-		viewport.y = 0.0f;
+		viewport.y = static_cast<float>(_swapChainExtent.height); // invert coordinate system
 		viewport.width = static_cast<float>(_swapChainExtent.width);
-		viewport.height = static_cast<float>(_swapChainExtent.height);
+		viewport.height = -static_cast<float>(_swapChainExtent.height); // invert coordinate system
 		viewport.minDepth = 0.0f;
 		viewport.maxDepth = 1.0f;
 
@@ -997,7 +1028,7 @@ private:
 		rasterizationCreateInfo.polygonMode = VK_POLYGON_MODE_FILL;
 		rasterizationCreateInfo.lineWidth = 1.0f;
 		rasterizationCreateInfo.cullMode = VK_CULL_MODE_BACK_BIT;
-		rasterizationCreateInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
+		rasterizationCreateInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 		rasterizationCreateInfo.depthBiasEnable = VK_FALSE;
 		rasterizationCreateInfo.depthBiasConstantFactor = 0.0f; // Optional
 		rasterizationCreateInfo.depthBiasClamp = 0.0f; // Optional
@@ -1170,7 +1201,7 @@ private:
 
 			// bind index buffer -------------------------------------------
 
-			vkCmdBindIndexBuffer(_commandBuffers[i], _indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+			vkCmdBindIndexBuffer(_commandBuffers[i], _indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
 			// bind descriptor sets -------------------------------------------
 
@@ -1961,7 +1992,7 @@ private:
 	void createTextureImage()
 	{
 		int texWidth = 0, texHeight = 0, texChannels = 0;
-		stbi_uc* pixels = stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+		stbi_uc* pixels = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
 		ScopeExit se{[&] {stbi_image_free(pixels); }};
 		
 		if(!pixels)
@@ -2088,6 +2119,55 @@ private:
 		vkFreeMemory(_device, _depthImageMemory, nullptr);
 	}
 
+	void loadModel()
+	{
+		tinyobj::attrib_t attrib;
+		std::vector<tinyobj::shape_t> shapes;
+		std::vector<tinyobj::material_t> materials;
+		std::string warn, err;
+
+		if(!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, MODEL_PATH.c_str()))
+		{
+			throw std::runtime_error(warn + err);
+		}
+
+		// The vertices vector contains a lot of duplicated vertex data, because many vertices are included in multiple triangles.
+		// We should keep only the unique vertices and use the index buffer to reuse them whenever they come up.
+		std::unordered_map<Vertex, uint32_t> uniqueVertices{};
+
+		for(const auto& shape : shapes)
+		{
+			for(const auto& index : shape.mesh.indices)
+			{
+				Vertex vertex{};
+
+				vertex.pos = {
+					attrib.vertices[3 * index.vertex_index + 0],
+					attrib.vertices[3 * index.vertex_index + 1],
+					attrib.vertices[3 * index.vertex_index + 2]
+				};
+
+				// The OBJ format assumes a coordinate system where a vertical coordinate of 0 means the bottom of the image.
+				// However we've uploaded our image into Vulkan in a top to bottom orientation where 0 means the top of the image.
+				// Solve this by flipping the vertical component of the texture coordinates.
+				vertex.texCoord = {
+					attrib.texcoords[2 * index.texcoord_index + 0],
+					1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
+				};
+
+				vertex.color = {1.0f, 1.0f, 1.0f};
+
+				if(!uniqueVertices.contains(vertex))
+				{
+					uniqueVertices[vertex] = static_cast<uint32_t>(_vertices.size());
+					_vertices.push_back(vertex);
+				}
+
+				_indices.push_back(uniqueVertices[vertex]);
+			}
+		}
+	}
+
 private:
 	double _fpsLastTime = 0.0;
 	uint32_t _fpsFrameCount = 0;
@@ -2109,6 +2189,9 @@ private:
 #endif
 
 	VkDebugUtilsMessengerEXT _debugMessenger = VK_NULL_HANDLE;
+
+	const std::string MODEL_PATH = "models/viking_room.obj";
+	const std::string TEXTURE_PATH = "textures/viking_room.png";
 
 	static constexpr uint32_t WIDTH = 800;
 	static constexpr uint32_t HEIGHT = 600;
@@ -2150,21 +2233,8 @@ private:
 	std::vector<VkFence> _framesInFlightFences; // one per frame in flight
 	uint32_t _currentFrame = 0;
 
-	const std::vector<Vertex> _vertices = {
-		{{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-		{{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-		{{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-		{{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
-
-		{{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-		{{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-		{{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-		{{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}
-	};
-	const std::vector<uint16_t> _indices = {
-		0, 1, 2, 2, 3, 0,
-	    4, 5, 6, 6, 7, 4
-	};
+	std::vector<Vertex> _vertices;
+	std::vector<uint32_t> _indices;
 	VkBuffer _vertexBuffer = VK_NULL_HANDLE;
 	VkDeviceMemory _vertexBufferMemory = VK_NULL_HANDLE;
 	VkBuffer _indexBuffer = VK_NULL_HANDLE;
