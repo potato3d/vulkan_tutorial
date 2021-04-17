@@ -281,16 +281,19 @@ private:
 		}
 		putc('\n', stdout);
 
-		puts("enabling the following validation layers:");
-		for(auto layer : _requiredValidationLayers)
+		if constexpr(_enableValidationLayers)
 		{
-			if(!availableLayers.contains(layer))
+			puts("enabling the following validation layers:");
+			for(auto layer : _requiredValidationLayers)
 			{
-				throw std::runtime_error("required validation layer not found: " + std::string{layer});
+				if(!availableLayers.contains(layer))
+				{
+					throw std::runtime_error("required validation layer not found: " + std::string{layer});
+				}
+				puts(layer);
 			}
-			puts(layer);
+			putc('\n', stdout);
 		}
-		putc('\n', stdout);
 	}
 
 	VkDebugUtilsMessengerCreateInfoEXT getDebugMessengerCreateInfo()
@@ -2202,7 +2205,8 @@ private:
 	std::vector<const char*> _requiredInstanceExtensions;
 
 	std::vector<const char*> _requiredValidationLayers = {
-		"VK_LAYER_KHRONOS_validation"
+		"VK_LAYER_KHRONOS_validation",
+		"VK_LAYER_KHRONOS_synchronization2"
 	};
 
 	std::vector<const char*> _requiredDeviceExtensions = {
