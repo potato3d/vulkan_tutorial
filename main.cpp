@@ -1326,9 +1326,9 @@ private:
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &_commandBuffers[imageIndex];
 
-		// if graphics and present queues are the same we don't need a semaphore for explicit synchronization
+		// TODO: if graphics and present queues are the same we don't need a semaphore for explicit synchronization?
 		VkSemaphore renderFinishedSemaphores[] = {_renderFinishedSemaphores[_currentFrame]};
-		if(_queueFamilies.graphics != _queueFamilies.present)
+		//if(_queueFamilies.graphics != _queueFamilies.present)
 		{
 			submitInfo.signalSemaphoreCount = static_cast<uint32_t>(std::size(renderFinishedSemaphores));
 			submitInfo.pSignalSemaphores = renderFinishedSemaphores;
@@ -1344,8 +1344,8 @@ private:
 		VkPresentInfoKHR presentInfo{};
 		presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 
-		// if graphics and present queues are the same we don't need a semaphore for explicit synchronization
-		if(_queueFamilies.graphics != _queueFamilies.present)
+		// // TODO: if graphics and present queues are the same we don't need a semaphore for explicit synchronization?
+		//if(_queueFamilies.graphics != _queueFamilies.present)
 		{
 			presentInfo.waitSemaphoreCount = static_cast<uint32_t>(std::size(renderFinishedSemaphores));
 			presentInfo.pWaitSemaphores = renderFinishedSemaphores;
