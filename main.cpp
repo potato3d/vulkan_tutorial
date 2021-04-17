@@ -311,13 +311,21 @@ private:
 
 	void createInstance()
 	{
+		uint32_t apiVersion = 0;
+		vkEnumerateInstanceVersion(&apiVersion);
+
+		if(apiVersion < MINIMUM_VULKAN_VERSION)
+		{
+			throw std::runtime_error("minimum vulkan version not supported");
+		}
+
 		VkApplicationInfo appInfo{};
 		appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
 		appInfo.pApplicationName = "Vulkan Tutorial";
 		appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
 		appInfo.pEngineName = "Batata";
 		appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-		appInfo.apiVersion = VK_API_VERSION_1_2;
+		appInfo.apiVersion = MINIMUM_VULKAN_VERSION;
 
 		if constexpr(_enableValidationLayers)
 		{
@@ -486,6 +494,12 @@ private:
 		return features.samplerAnisotropy;
 	}
 
+	bool checkPhysicalDeviceProperties(VkPhysicalDevice physicalDevice, VkPhysicalDeviceProperties& properties)
+	{
+		vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+		return properties.apiVersion >= MINIMUM_VULKAN_VERSION;
+	}
+
 	void choosePhysicalDevice()
 	{
 		uint32_t physicalDeviceCount = 0;
@@ -529,7 +543,10 @@ private:
 				continue;
 			}
 
-			vkGetPhysicalDeviceProperties(physicalDevice, &properties);			
+			if(!checkPhysicalDeviceProperties(physicalDevice, properties))
+			{
+				continue;
+			}
 
 			_physicalDevice = physicalDevice;
 			_queueFamilies = families;
@@ -2105,6 +2122,16 @@ private:
 
 	void createDepthBuffer()
 	{
+		// TODO: although the tutorial uses only one depth buffer, several sources on the internet claim this is wrong and the code does not guarantee that two frames cannot overlap (draw simultaneously), leading to race conditions on the same depth buffer
+		// the best performance solution would be to create one depth buffer per frame in flight
+		// refs:
+		// https://www.reddit.com/r/vulkan/comments/aavxl4/why_is_a_single_depth_buffer_sufficient_for/
+		// https://stackoverflow.com/questions/62371266/why-is-a-single-depth-buffer-sufficient-for-this-vulkan-swapchain-render-loop
+		// https://www.reddit.com/r/vulkan/comments/aavxl4/why_is_a_single_depth_buffer_sufficient_for/ecvgupj/
+		// Note that some comments on the tutorial webpage says it is still ok:
+		//   As per the spec, implicit ordering does not guarantee that commands submitted before finish before commands submitted after start. For that, a synchronization command must be used. I think the best way to look at implicit ordering is that commands submitted before must start before commands submitted after start (but not finish).
+		//   In the most general case, where the graphicsand present queue end up being different, this example ends up relying on a bit of undefined behaviour, because there are no guarantees that two frames will not overlap(note that the external subpass dependency is not enough because it is for the COLOR_OUTPUT stage while depth writing happens in the FRAGMENT_TESTS stages).
+		//   However, if the graphics and present queue do end up being the same, then the renderFinished semaphore guarantees proper execution ordering.This is because the vkQueuePresentKHR command waits on that semaphoreand it must begin before later commands in the queue begin(due to implicit ordering) and that only happens after rendering from the previous frame finished.
 		VkFormat depthFormat = findDepthFormat();
 		createImage(_swapChainExtent.width, _swapChainExtent.height, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, _depthImage, _depthImageMemory);
 		_depthImageView = createImageView(_depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
@@ -2199,6 +2226,8 @@ private:
 	VkSurfaceKHR _surface = VK_NULL_HANDLE;
 
 	bool _windowResized = false;
+
+	static const uint32_t MINIMUM_VULKAN_VERSION = VK_API_VERSION_1_2;
 
 	VkInstance _instance = VK_NULL_HANDLE;
 	
