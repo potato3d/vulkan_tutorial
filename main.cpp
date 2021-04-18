@@ -1312,14 +1312,8 @@ private:
 
 		// acquire next image from swap chain -----------------------------------------------------
 
-		auto startTime = std::chrono::high_resolution_clock::now();
-
 		uint32_t imageIndex = 0;
 		VkResult result = vkAcquireNextImageKHR(_device, _swapChain, UINT64_MAX, _imageAvailableSemaphores[_currentFrame], VK_NULL_HANDLE, &imageIndex);
-
-		auto endTime = std::chrono::high_resolution_clock::now();
-
-		printf("%f ms\n", std::chrono::duration<double, std::milli>(endTime - startTime).count());
 
 		if(result == VK_ERROR_OUT_OF_DATE_KHR)
 		{
