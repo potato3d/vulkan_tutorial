@@ -330,11 +330,6 @@ private:
 		appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
 		appInfo.apiVersion = MINIMUM_VULKAN_VERSION;
 
-		if constexpr(_enableValidationLayers)
-		{
-			_requiredInstanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-		}
-
 		checkRequiredInstanceExtensions();
 		checkRequiredValidationLayers();
 
@@ -372,6 +367,7 @@ private:
 		const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
 		void* pUserData)
 	{
+		// TODO: checkout other fields in pCallbackData
 		fprintf(stderr, "validation: %s\n", pCallbackData->pMessage);
 		return VK_FALSE;
 	}
@@ -2202,7 +2198,13 @@ private:
 	double _fpsLastTime = 0.0;
 	uint32_t _fpsFrameCount = 0;
 
+#ifdef _DEBUG
+	std::vector<const char*> _requiredInstanceExtensions = {
+		VK_EXT_DEBUG_UTILS_EXTENSION_NAME
+	};
+#else
 	std::vector<const char*> _requiredInstanceExtensions;
+#endif
 
 	std::vector<const char*> _requiredValidationLayers = {
 		"VK_LAYER_KHRONOS_validation",
