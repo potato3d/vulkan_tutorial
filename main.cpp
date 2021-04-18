@@ -368,7 +368,7 @@ private:
 		void* pUserData)
 	{
 		// TODO: checkout other fields in pCallbackData
-		fprintf(stderr, "validation: %s\n", pCallbackData->pMessage);
+		fprintf(stderr, "%s\n", pCallbackData->pMessage);
 		return VK_FALSE;
 	}
 
@@ -833,6 +833,9 @@ private:
 		subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
 		VkSubpassDescription subpasses[] = {subpass};
+
+		// TODO: the question is: why can I use only a single depth buffer for multiple frames in flight? what makes sure it is never concurrently written by more than one frame at the same time?
+		// for example, if I remove the subpass dependencies, everything still works. 
 
 		// src and dst are indices to subpasses in VkSubpassDescription array
 		// dst must always be higher than src
@@ -1309,8 +1312,14 @@ private:
 
 		// acquire next image from swap chain -----------------------------------------------------
 
+		auto startTime = std::chrono::high_resolution_clock::now();
+
 		uint32_t imageIndex = 0;
 		VkResult result = vkAcquireNextImageKHR(_device, _swapChain, UINT64_MAX, _imageAvailableSemaphores[_currentFrame], VK_NULL_HANDLE, &imageIndex);
+
+		auto endTime = std::chrono::high_resolution_clock::now();
+
+		printf("%f ms\n", std::chrono::duration<double, std::milli>(endTime - startTime).count());
 
 		if(result == VK_ERROR_OUT_OF_DATE_KHR)
 		{
